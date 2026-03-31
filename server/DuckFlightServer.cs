@@ -83,11 +83,19 @@ namespace DuckArrowServer
                     {
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
-                        // Always send the schema first. Without this, empty result
-                        // sets (zero rows) would close the stream without a schema,
-                        // causing the client to hang on "await stream.Schema".
-                        var emptyBatch = new RecordBatch(schema, new IArrowArray[0], 0);
-                        await responseStream.WriteAsync(emptyBatch).ConfigureAwait(false);
+                        // Send an empty batch to ensure the schema is transmitted.
+                        // Without this, zero-row results close the stream with no
+                        // schema, causing the client to hang on "await stream.Schema".
+                        // Arrow 14 validates array count matches schema field count,
+                        // so we must build zero-length arrays for each column.
+                        var emptyArrays = new IArrowArray[schema.FieldsList.Count];
+                        for (int c = 0; c < emptyArrays.Length; c++)
+                            emptyArrays[c] = ArrowTypeConverter.BuildArray(
+                                schema.GetFieldByIndex(c).DataType, new System.Collections.Generic.List<object>());
+                        using (var emptyBatch = new RecordBatch(schema, emptyArrays, 0))
+                        {
+                            await responseStream.WriteAsync(emptyBatch).ConfigureAwait(false);
+                        }
 
                         // Stream data batches until there are no more rows.
                         RecordBatch batch;
