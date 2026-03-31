@@ -5,23 +5,22 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Flight;
-using Apache.Arrow.Flight.Server;
 using Grpc.Core;
+using Google.Protobuf;
 
 namespace DuckArrowServer
 {
     /// <summary>
     /// Arrow Flight server backed by a DuckDB database.
+    /// Implements the raw gRPC FlightServiceBase for Grpc.Core hosting
+    /// (Apache.Arrow.Flight.Server.FlightServer is for ASP.NET Core only).
     ///
-    /// This is the main server class. It handles three types of requests:
+    /// Handles three types of requests:
     ///   - DoGet:   Run a SELECT query and stream Arrow batches to the client.
     ///   - DoAction: Run a command (execute SQL, ping, or get stats).
     ///   - ListActions: Tell the client what actions are available.
-    ///
-    /// Uses a connection pool for read queries and a write serializer
-    /// for batched write operations.
     /// </summary>
-    public sealed class DuckFlightServer : FlightServer, IDisposable
+    public sealed class DuckFlightServer : IDisposable
     {
         private readonly ServerConfig config;
         private readonly IConnectionPool readPool;
@@ -54,24 +53,62 @@ namespace DuckArrowServer
             };
         }
 
-        // ── DoGet: Read queries ──────────────────────────────────────────────
-
         /// <summary>
-        /// Handle a DoGet request: execute a SELECT query and stream results.
-        ///
-        /// Steps:
-        ///   1. Decode the SQL from the ticket.
-        ///   2. Borrow a read connection from the pool.
-        ///   3. Execute the query.
-        ///   4. Build an Arrow schema from the result columns.
-        ///   5. Stream record batches (1024 rows each) to the client.
+        /// Create the gRPC ServerServiceDefinition for Grpc.Core hosting.
+        /// Manually maps the Flight proto RPCs to our handler methods.
         /// </summary>
-        public override async Task DoGet(
-            FlightTicket ticket,
-            FlightServerRecordBatchStreamWriter responseStream,
-            ServerCallContext context)
+        public ServerServiceDefinition BuildGrpcService()
         {
-            string sql = Encoding.UTF8.GetString(ticket.Ticket.ToByteArray());
+            // The Flight proto defines these RPCs. We implement DoGet, DoAction, ListActions.
+            // Others return UNIMPLEMENTED.
+            var builder = ServerServiceDefinition.CreateBuilder();
+
+            // DoGet: client sends a Ticket, server streams FlightData
+            builder.AddMethod(
+                new Method<byte[], byte[]>(
+                    MethodType.ServerStreaming,
+                    "arrow.flight.protocol.FlightService",
+                    "DoGet",
+                    ByteArrayMarshaller,
+                    ByteArrayMarshaller),
+                HandleDoGetRaw);
+
+            // DoAction: client sends Action, server streams Result
+            builder.AddMethod(
+                new Method<byte[], byte[]>(
+                    MethodType.ServerStreaming,
+                    "arrow.flight.protocol.FlightService",
+                    "DoAction",
+                    ByteArrayMarshaller,
+                    ByteArrayMarshaller),
+                HandleDoActionRaw);
+
+            // ListActions: client sends Empty, server streams ActionType
+            builder.AddMethod(
+                new Method<byte[], byte[]>(
+                    MethodType.ServerStreaming,
+                    "arrow.flight.protocol.FlightService",
+                    "ListActions",
+                    ByteArrayMarshaller,
+                    ByteArrayMarshaller),
+                HandleListActionsRaw);
+
+            return builder.Build();
+        }
+
+        // ── Raw byte marshaller for proto messages ───────────────────────────
+
+        private static readonly Marshaller<byte[]> ByteArrayMarshaller = new Marshaller<byte[]>(
+            bytes => bytes,
+            bytes => bytes);
+
+        // ── DoGet handler ────────────────────────────────────────────────────
+
+        private async Task HandleDoGetRaw(byte[] request, IServerStreamWriter<byte[]> responseStream, ServerCallContext context)
+        {
+            // Deserialize the Ticket proto message to get the SQL.
+            var ticket = Apache.Arrow.Flight.Protocol.Ticket.Parser.ParseFrom(request);
+            string sql = ticket.Ticket_.ToStringUtf8();
 
             try
             {
@@ -83,27 +120,16 @@ namespace DuckArrowServer
                     {
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
-                        // Send an empty batch to ensure the schema is transmitted.
-                        // Without this, zero-row results close the stream with no
-                        // schema, causing the client to hang on "await stream.Schema".
-                        // Arrow 14 validates array count matches schema field count,
-                        // so we must build zero-length arrays for each column.
-                        var emptyArrays = new IArrowArray[schema.FieldsList.Count];
-                        for (int c = 0; c < emptyArrays.Length; c++)
-                            emptyArrays[c] = ArrowTypeConverter.BuildArray(
-                                schema.GetFieldByIndex(c).DataType, new System.Collections.Generic.List<object>());
-                        using (var emptyBatch = new RecordBatch(schema, emptyArrays, 0))
-                        {
-                            await responseStream.WriteAsync(emptyBatch).ConfigureAwait(false);
-                        }
+                        // Build schema message and send it first.
+                        await SendSchema(responseStream, schema).ConfigureAwait(false);
 
-                        // Stream data batches until there are no more rows.
+                        // Stream data batches.
                         RecordBatch batch;
                         while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
                         {
                             try
                             {
-                                await responseStream.WriteAsync(batch).ConfigureAwait(false);
+                                await SendRecordBatch(responseStream, batch, schema).ConfigureAwait(false);
                             }
                             finally
                             {
@@ -117,8 +143,6 @@ namespace DuckArrowServer
             }
             catch (OperationCanceledException)
             {
-                // gRPC cancellation — let it propagate so the framework
-                // returns StatusCode.Cancelled instead of Internal.
                 throw;
             }
             catch (Exception ex)
@@ -128,112 +152,135 @@ namespace DuckArrowServer
             }
         }
 
-        // ── DoAction: Execute / Ping / Stats ─────────────────────────────────
+        // ── DoAction handler ─────────────────────────────────────────────────
 
-        /// <summary>
-        /// Handle a DoAction request. Routes to the correct handler
-        /// based on the action type.
-        /// </summary>
-        public override async Task DoAction(
-            FlightAction request,
-            IAsyncStreamWriter<FlightResult> responseStream,
-            ServerCallContext context)
+        private async Task HandleDoActionRaw(byte[] request, IServerStreamWriter<byte[]> responseStream, ServerCallContext context)
         {
-            switch (request.Type)
+            var action = Apache.Arrow.Flight.Protocol.Action.Parser.ParseFrom(request);
+            string actionType = action.Type;
+            byte[] bodyBytes = action.Body.ToByteArray();
+
+            if (actionType == "execute")
             {
-                case "execute":
-                    HandleExecute(request);
-                    return;
+                if (bodyBytes == null || bodyBytes.Length == 0)
+                {
+                    Interlocked.Increment(ref errors);
+                    throw new RpcException(new Status(StatusCode.InvalidArgument,
+                        "execute action requires a non-empty SQL body"));
+                }
 
-                case "ping":
-                    await HandlePing(responseStream).ConfigureAwait(false);
-                    return;
+                string sql = Encoding.UTF8.GetString(bodyBytes);
+                var result = writer.Submit(sql);
+                if (!result.Ok)
+                {
+                    Interlocked.Increment(ref errors);
+                    throw new RpcException(new Status(StatusCode.Internal, result.Error));
+                }
 
-                case "stats":
-                    await HandleStats(responseStream).ConfigureAwait(false);
-                    return;
+                Interlocked.Increment(ref queriesWrite);
+                return;
+            }
 
-                default:
-                    throw new RpcException(new Status(StatusCode.Unimplemented,
-                        "Unknown action '" + request.Type + "'. Supported: execute, ping, stats."));
+            if (actionType == "ping")
+            {
+                await SendActionResult(responseStream, "pong").ConfigureAwait(false);
+                return;
+            }
+
+            if (actionType == "stats")
+            {
+                var s = GetStats();
+                string json = string.Format(
+                    "{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2}," +
+                    "\"reader_pool_size\":{3},\"port\":{4}}}",
+                    s.QueriesRead, s.QueriesWrite, s.Errors, s.ReaderPoolSize, s.Port);
+                await SendActionResult(responseStream, json).ConfigureAwait(false);
+                return;
+            }
+
+            throw new RpcException(new Status(StatusCode.Unimplemented,
+                "Unknown action '" + actionType + "'. Supported: execute, ping, stats."));
+        }
+
+        // ── ListActions handler ──────────────────────────────────────────────
+
+        private async Task HandleListActionsRaw(byte[] request, IServerStreamWriter<byte[]> responseStream, ServerCallContext context)
+        {
+            await SendActionType(responseStream, "execute",
+                "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success.")
+                .ConfigureAwait(false);
+            await SendActionType(responseStream, "ping",
+                "Liveness check. Returns 'pong'.")
+                .ConfigureAwait(false);
+            await SendActionType(responseStream, "stats",
+                "Server metrics as JSON.")
+                .ConfigureAwait(false);
+        }
+
+        // ── Proto serialization helpers ──────────────────────────────────────
+
+        private static async Task SendActionResult(IServerStreamWriter<byte[]> stream, string body)
+        {
+            var result = new Apache.Arrow.Flight.Protocol.Result
+            {
+                Body = ByteString.CopyFromUtf8(body)
+            };
+            await stream.WriteAsync(result.ToByteArray()).ConfigureAwait(false);
+        }
+
+        private static async Task SendActionType(IServerStreamWriter<byte[]> stream, string type, string description)
+        {
+            var actionType = new Apache.Arrow.Flight.Protocol.ActionType
+            {
+                Type = type,
+                Description = description
+            };
+            await stream.WriteAsync(actionType.ToByteArray()).ConfigureAwait(false);
+        }
+
+        private static async Task SendSchema(IServerStreamWriter<byte[]> stream, Schema schema)
+        {
+            // Serialize the schema as an IPC message wrapped in FlightData.
+            var flightData = new Apache.Arrow.Flight.Protocol.FlightData
+            {
+                DataHeader = ByteString.CopyFrom(SerializeSchemaAsIpc(schema))
+            };
+            await stream.WriteAsync(flightData.ToByteArray()).ConfigureAwait(false);
+        }
+
+        private static async Task SendRecordBatch(IServerStreamWriter<byte[]> stream, RecordBatch batch, Schema schema)
+        {
+            // Serialize the record batch as IPC and wrap in FlightData.
+            byte[] ipcBytes = SerializeBatchAsIpc(batch, schema);
+            var flightData = new Apache.Arrow.Flight.Protocol.FlightData
+            {
+                DataHeader = ByteString.CopyFrom(ipcBytes)
+            };
+            await stream.WriteAsync(flightData.ToByteArray()).ConfigureAwait(false);
+        }
+
+        private static byte[] SerializeSchemaAsIpc(Schema schema)
+        {
+            using (var ms = new System.IO.MemoryStream())
+            {
+                var writer = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
+                // WriteStart sends the schema message.
+                writer.WriteStartAsync().Wait();
+                writer.WriteEndAsync().Wait();
+                writer.Dispose();
+                return ms.ToArray();
             }
         }
 
-        /// <summary>
-        /// Execute a DML or DDL statement via the write serializer.
-        /// </summary>
-        private void HandleExecute(FlightAction request)
+        private static byte[] SerializeBatchAsIpc(RecordBatch batch, Schema schema)
         {
-            // Validate the request body.
-            if (request.Body == null || request.Body.Length == 0)
+            using (var ms = new System.IO.MemoryStream())
             {
-                Interlocked.Increment(ref errors);
-                throw new RpcException(new Status(StatusCode.InvalidArgument,
-                    "execute action requires a non-empty SQL body"));
+                var writer = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
+                writer.WriteRecordBatchAsync(batch).Wait();
+                writer.Dispose();
+                return ms.ToArray();
             }
-
-            string sql = Encoding.UTF8.GetString(request.Body.ToByteArray());
-
-            // Submit to the write serializer and wait for commit.
-            var result = writer.Submit(sql);
-            if (!result.Ok)
-            {
-                Interlocked.Increment(ref errors);
-                throw new RpcException(new Status(StatusCode.Internal, result.Error));
-            }
-
-            // Only count after success.
-            Interlocked.Increment(ref queriesWrite);
-        }
-
-        /// <summary>
-        /// Respond with "pong" for liveness checks.
-        /// </summary>
-        private static async Task HandlePing(IAsyncStreamWriter<FlightResult> responseStream)
-        {
-            await responseStream.WriteAsync(
-                new FlightResult(Encoding.UTF8.GetBytes("pong")))
-                .ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Respond with a JSON object of server metrics.
-        /// </summary>
-        private async Task HandleStats(IAsyncStreamWriter<FlightResult> responseStream)
-        {
-            var s = GetStats();
-            string json = string.Format(
-                "{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2}," +
-                "\"reader_pool_size\":{3},\"port\":{4}}}",
-                s.QueriesRead, s.QueriesWrite, s.Errors, s.ReaderPoolSize, s.Port);
-
-            await responseStream.WriteAsync(
-                new FlightResult(Encoding.UTF8.GetBytes(json)))
-                .ConfigureAwait(false);
-        }
-
-        // ── ListActions ──────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Tell clients what actions this server supports.
-        /// In Apache.Arrow.Flight 14, ListActions uses a stream writer.
-        /// </summary>
-        public override async Task ListActions(
-            IAsyncStreamWriter<FlightActionType> responseStream,
-            ServerCallContext context)
-        {
-            await responseStream.WriteAsync(
-                new FlightActionType("execute",
-                    "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success."))
-                .ConfigureAwait(false);
-            await responseStream.WriteAsync(
-                new FlightActionType("ping",
-                    "Liveness check. Returns 'pong'."))
-                .ConfigureAwait(false);
-            await responseStream.WriteAsync(
-                new FlightActionType("stats",
-                    "Server metrics as JSON."))
-                .ConfigureAwait(false);
         }
 
         // ── Dispose ──────────────────────────────────────────────────────────
