@@ -1,6 +1,6 @@
 # DuckDB Arrow Flight Server  v4.1.8
 
-A C++11 server that exposes a DuckDB database as an **Apache Arrow Flight** service,
+A C++14 server (Visual Studio 2017+) that exposes a DuckDB database as an **Apache Arrow Flight** service,
 with a **.NET 4.6.2** client library.
 
 ```
@@ -14,7 +14,7 @@ with a **.NET 4.6.2** client library.
 │                                                                        │
 │         gRPC / HTTP/2 — multiplexed, optionally TLS                   │
 │                                                                        │
-│  C++11 DuckDB Flight Server                                            │
+│  C++14 DuckDB Flight Server (Visual Studio 2017+)                      │
 │  ┌────────────────────────────────────────────────────────────────┐    │
 │  │  arrow::flight::FlightServerBase (gRPC thread pool)           │    │
 │  │  ┌──────────────────────┬────────────────────────────────┐    │    │
