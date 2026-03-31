@@ -89,13 +89,13 @@ namespace DuckArrowBenchmark
             results.Add(runner.RunConcurrentReaders(1, 50, 100));
             results.Last().Print();
 
-            results.Add(runner.RunConcurrentReaders(4, 25, 100));
+            results.Add(runner.RunConcurrentReaders(10, 25, 100));
             results.Last().Print();
 
             results.Add(runner.RunConcurrentWriters(1, 50));
             results.Last().Print();
 
-            results.Add(runner.RunConcurrentWriters(4, 25));
+            results.Add(runner.RunConcurrentWriters(10, 25));
             results.Last().Print();
         }
 
@@ -107,10 +107,10 @@ namespace DuckArrowBenchmark
             Console.WriteLine("=== Concurrent Readers ===");
             Console.WriteLine();
 
-            int[] readerLevels = { 1, 2, 4, 8, 16, 32 };
+            int[] readerLevels = { 1, 5, 10, 25, 50, 100, 150, 200, 250, 300 };
             foreach (int level in readerLevels)
             {
-                var result = runner.RunConcurrentReaders(level, 50, 1000);
+                var result = runner.RunConcurrentReaders(level, 20, 1000);
                 result.Print();
                 results.Add(result);
             }
@@ -120,10 +120,10 @@ namespace DuckArrowBenchmark
             Console.WriteLine("=== Concurrent Writers ===");
             Console.WriteLine();
 
-            int[] writerLevels = { 1, 2, 4, 8, 16, 32 };
+            int[] writerLevels = { 1, 5, 10, 25, 50, 100, 150, 200, 250, 300 };
             foreach (int level in writerLevels)
             {
-                var result = runner.RunConcurrentWriters(level, 50);
+                var result = runner.RunConcurrentWriters(level, 20);
                 result.Print();
                 results.Add(result);
             }
@@ -133,13 +133,16 @@ namespace DuckArrowBenchmark
             Console.WriteLine("=== Mixed Read/Write Workloads ===");
             Console.WriteLine();
 
-            results.Add(runner.RunMixedWorkload(readers: 8, writers: 2, opsPerClient: 30));
+            results.Add(runner.RunMixedWorkload(readers: 50, writers: 10, opsPerClient: 20));
             results.Last().Print();
 
-            results.Add(runner.RunMixedWorkload(readers: 4, writers: 4, opsPerClient: 30));
+            results.Add(runner.RunMixedWorkload(readers: 100, writers: 50, opsPerClient: 15));
             results.Last().Print();
 
-            results.Add(runner.RunMixedWorkload(readers: 2, writers: 8, opsPerClient: 30));
+            results.Add(runner.RunMixedWorkload(readers: 150, writers: 150, opsPerClient: 10));
+            results.Last().Print();
+
+            results.Add(runner.RunMixedWorkload(readers: 50, writers: 250, opsPerClient: 10));
             results.Last().Print();
 
             // --- Large result sets ---
@@ -147,13 +150,19 @@ namespace DuckArrowBenchmark
             Console.WriteLine("=== Large Result Sets ===");
             Console.WriteLine();
 
-            results.Add(runner.RunLargeResultSet(rowCount: 10000, iterations: 10));
-            results.Last().Print();
-
             results.Add(runner.RunLargeResultSet(rowCount: 100000, iterations: 5));
             results.Last().Print();
 
             results.Add(runner.RunLargeResultSet(rowCount: 1000000, iterations: 3));
+            results.Last().Print();
+
+            results.Add(runner.RunLargeResultSet(rowCount: 5000000, iterations: 2));
+            results.Last().Print();
+
+            results.Add(runner.RunLargeResultSet(rowCount: 12000000, iterations: 2));
+            results.Last().Print();
+
+            results.Add(runner.RunLargeResultSet(rowCount: 24000000, iterations: 1));
             results.Last().Print();
         }
 
@@ -167,50 +176,50 @@ namespace DuckArrowBenchmark
             // --- Find max reader concurrency ---
             var readerResults = runner.FindMaxConcurrency(
                 isReader: true,
-                startConcurrency: 4,
-                maxConcurrency: 256,
-                step: 4,
-                opsPerClient: 20,
+                startConcurrency: 10,
+                maxConcurrency: 300,
+                step: 10,
+                opsPerClient: 10,
                 maxErrorRate: 0.05);
             results.AddRange(readerResults);
 
             // --- Find max writer concurrency ---
             var writerResults = runner.FindMaxConcurrency(
                 isReader: false,
-                startConcurrency: 4,
-                maxConcurrency: 256,
-                step: 4,
-                opsPerClient: 20,
+                startConcurrency: 10,
+                maxConcurrency: 300,
+                step: 10,
+                opsPerClient: 10,
                 maxErrorRate: 0.05);
             results.AddRange(writerResults);
 
-            // --- Sustained throughput: 30 seconds each ---
+            // --- Sustained throughput: 60 seconds each ---
             Console.WriteLine();
-            Console.WriteLine("=== Sustained Throughput (30 seconds each) ===");
+            Console.WriteLine("=== Sustained Throughput (60 seconds each) ===");
             Console.WriteLine();
 
             var sustainedRead = runner.RunSustainedThroughput(
-                concurrency: 8, durationSeconds: 30, isReader: true);
+                concurrency: 50, durationSeconds: 60, isReader: true);
             sustainedRead.Print();
             results.Add(sustainedRead);
 
             var sustainedWrite = runner.RunSustainedThroughput(
-                concurrency: 8, durationSeconds: 30, isReader: false);
+                concurrency: 50, durationSeconds: 60, isReader: false);
             sustainedWrite.Print();
             results.Add(sustainedWrite);
 
-            // --- High concurrency readers ---
+            var sustainedMixed = runner.RunSustainedThroughput(
+                concurrency: 100, durationSeconds: 60, isReader: true);
+            sustainedMixed.Print();
+            results.Add(sustainedMixed);
+
+            // --- Large result sets at high concurrency ---
             Console.WriteLine();
-            Console.WriteLine("=== High Concurrency Readers ===");
+            Console.WriteLine("=== Large Result Sets (24M rows) ===");
             Console.WriteLine();
 
-            int[] highLevels = { 64, 128, 256 };
-            foreach (int level in highLevels)
-            {
-                var result = runner.RunConcurrentReaders(level, 10, 100);
-                result.Print();
-                results.Add(result);
-            }
+            results.Add(runner.RunLargeResultSet(rowCount: 24000000, iterations: 1));
+            results.Last().Print();
         }
 
         // ── Summary table ────────────────────────────────────────────────────
