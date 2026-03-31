@@ -75,6 +75,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="DuckFlightServer.cs" />
+    <Compile Include="FlightProto.cs" />
     <Compile Include="DatabaseManager.cs" />
     <Compile Include="IConnectionPool.cs" />
     <Compile Include="ConnectionPool.cs" />

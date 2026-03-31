@@ -4,16 +4,14 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
-using Apache.Arrow.Flight;
 using Grpc.Core;
-using Google.Protobuf;
 
 namespace DuckArrowServer
 {
     /// <summary>
     /// Arrow Flight server backed by a DuckDB database.
-    /// Implements the raw gRPC FlightServiceBase for Grpc.Core hosting
-    /// (Apache.Arrow.Flight.Server.FlightServer is for ASP.NET Core only).
+    /// Uses raw gRPC with manual proto encoding/decoding because
+    /// Apache.Arrow.Flight.Protocol types are internal in the NuGet package.
     ///
     /// Handles three types of requests:
     ///   - DoGet:   Run a SELECT query and stream Arrow batches to the client.
@@ -55,60 +53,54 @@ namespace DuckArrowServer
 
         /// <summary>
         /// Create the gRPC ServerServiceDefinition for Grpc.Core hosting.
-        /// Manually maps the Flight proto RPCs to our handler methods.
+        /// Maps Flight proto RPCs to our handler methods.
         /// </summary>
         public ServerServiceDefinition BuildGrpcService()
         {
-            // The Flight proto defines these RPCs. We implement DoGet, DoAction, ListActions.
-            // Others return UNIMPLEMENTED.
             var builder = ServerServiceDefinition.CreateBuilder();
 
-            // DoGet: client sends a Ticket, server streams FlightData
             builder.AddMethod(
                 new Method<byte[], byte[]>(
                     MethodType.ServerStreaming,
                     "arrow.flight.protocol.FlightService",
                     "DoGet",
-                    ByteArrayMarshaller,
-                    ByteArrayMarshaller),
-                HandleDoGetRaw);
+                    RawMarshaller, RawMarshaller),
+                HandleDoGet);
 
-            // DoAction: client sends Action, server streams Result
             builder.AddMethod(
                 new Method<byte[], byte[]>(
                     MethodType.ServerStreaming,
                     "arrow.flight.protocol.FlightService",
                     "DoAction",
-                    ByteArrayMarshaller,
-                    ByteArrayMarshaller),
-                HandleDoActionRaw);
+                    RawMarshaller, RawMarshaller),
+                HandleDoAction);
 
-            // ListActions: client sends Empty, server streams ActionType
             builder.AddMethod(
                 new Method<byte[], byte[]>(
                     MethodType.ServerStreaming,
                     "arrow.flight.protocol.FlightService",
                     "ListActions",
-                    ByteArrayMarshaller,
-                    ByteArrayMarshaller),
-                HandleListActionsRaw);
+                    RawMarshaller, RawMarshaller),
+                HandleListActions);
 
             return builder.Build();
         }
 
-        // ── Raw byte marshaller for proto messages ───────────────────────────
-
-        private static readonly Marshaller<byte[]> ByteArrayMarshaller = new Marshaller<byte[]>(
+        private static readonly Marshaller<byte[]> RawMarshaller = new Marshaller<byte[]>(
             bytes => bytes,
             bytes => bytes);
 
-        // ── DoGet handler ────────────────────────────────────────────────────
+        // ── DoGet: Read queries ──────────────────────────────────────────────
 
-        private async Task HandleDoGetRaw(byte[] request, IServerStreamWriter<byte[]> responseStream, ServerCallContext context)
+        private async Task HandleDoGet(
+            byte[] request,
+            IServerStreamWriter<byte[]> responseStream,
+            ServerCallContext context)
         {
-            // Deserialize the Ticket proto message to get the SQL.
-            var ticket = Apache.Arrow.Flight.Protocol.Ticket.Parser.ParseFrom(request);
-            string sql = ticket.Ticket_.ToStringUtf8();
+            var ticket = FlightProto.ParseTicket(request);
+            string sql = ticket.TicketBytes != null
+                ? Encoding.UTF8.GetString(ticket.TicketBytes)
+                : "";
 
             try
             {
@@ -120,8 +112,10 @@ namespace DuckArrowServer
                     {
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
-                        // Build schema message and send it first.
-                        await SendSchema(responseStream, schema).ConfigureAwait(false);
+                        // Send schema as the first message.
+                        byte[] schemaIpc = SerializeSchemaIpc(schema);
+                        await responseStream.WriteAsync(
+                            FlightProto.WriteFlightData(schemaIpc)).ConfigureAwait(false);
 
                         // Stream data batches.
                         RecordBatch batch;
@@ -129,7 +123,9 @@ namespace DuckArrowServer
                         {
                             try
                             {
-                                await SendRecordBatch(responseStream, batch, schema).ConfigureAwait(false);
+                                byte[] batchIpc = SerializeBatchIpc(batch, schema);
+                                await responseStream.WriteAsync(
+                                    FlightProto.WriteFlightData(batchIpc)).ConfigureAwait(false);
                             }
                             finally
                             {
@@ -152,24 +148,26 @@ namespace DuckArrowServer
             }
         }
 
-        // ── DoAction handler ─────────────────────────────────────────────────
+        // ── DoAction: Execute / Ping / Stats ─────────────────────────────────
 
-        private async Task HandleDoActionRaw(byte[] request, IServerStreamWriter<byte[]> responseStream, ServerCallContext context)
+        private async Task HandleDoAction(
+            byte[] request,
+            IServerStreamWriter<byte[]> responseStream,
+            ServerCallContext context)
         {
-            var action = Apache.Arrow.Flight.Protocol.Action.Parser.ParseFrom(request);
-            string actionType = action.Type;
-            byte[] bodyBytes = action.Body.ToByteArray();
+            var action = FlightProto.ParseAction(request);
+            string actionType = action.Type ?? "";
 
             if (actionType == "execute")
             {
-                if (bodyBytes == null || bodyBytes.Length == 0)
+                if (action.Body == null || action.Body.Length == 0)
                 {
                     Interlocked.Increment(ref errors);
                     throw new RpcException(new Status(StatusCode.InvalidArgument,
                         "execute action requires a non-empty SQL body"));
                 }
 
-                string sql = Encoding.UTF8.GetString(bodyBytes);
+                string sql = Encoding.UTF8.GetString(action.Body);
                 var result = writer.Submit(sql);
                 if (!result.Ok)
                 {
@@ -183,7 +181,9 @@ namespace DuckArrowServer
 
             if (actionType == "ping")
             {
-                await SendActionResult(responseStream, "pong").ConfigureAwait(false);
+                byte[] pongBytes = Encoding.UTF8.GetBytes("pong");
+                await responseStream.WriteAsync(
+                    FlightProto.WriteResult(pongBytes)).ConfigureAwait(false);
                 return;
             }
 
@@ -194,7 +194,9 @@ namespace DuckArrowServer
                     "{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2}," +
                     "\"reader_pool_size\":{3},\"port\":{4}}}",
                     s.QueriesRead, s.QueriesWrite, s.Errors, s.ReaderPoolSize, s.Port);
-                await SendActionResult(responseStream, json).ConfigureAwait(false);
+                byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
+                await responseStream.WriteAsync(
+                    FlightProto.WriteResult(jsonBytes)).ConfigureAwait(false);
                 return;
             }
 
@@ -202,83 +204,45 @@ namespace DuckArrowServer
                 "Unknown action '" + actionType + "'. Supported: execute, ping, stats."));
         }
 
-        // ── ListActions handler ──────────────────────────────────────────────
+        // ── ListActions ──────────────────────────────────────────────────────
 
-        private async Task HandleListActionsRaw(byte[] request, IServerStreamWriter<byte[]> responseStream, ServerCallContext context)
+        private async Task HandleListActions(
+            byte[] request,
+            IServerStreamWriter<byte[]> responseStream,
+            ServerCallContext context)
         {
-            await SendActionType(responseStream, "execute",
-                "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success.")
+            await responseStream.WriteAsync(FlightProto.WriteActionType("execute",
+                "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success."))
                 .ConfigureAwait(false);
-            await SendActionType(responseStream, "ping",
-                "Liveness check. Returns 'pong'.")
+            await responseStream.WriteAsync(FlightProto.WriteActionType("ping",
+                "Liveness check. Returns 'pong'."))
                 .ConfigureAwait(false);
-            await SendActionType(responseStream, "stats",
-                "Server metrics as JSON.")
+            await responseStream.WriteAsync(FlightProto.WriteActionType("stats",
+                "Server metrics as JSON."))
                 .ConfigureAwait(false);
         }
 
-        // ── Proto serialization helpers ──────────────────────────────────────
+        // ── IPC serialization ────────────────────────────────────────────────
 
-        private static async Task SendActionResult(IServerStreamWriter<byte[]> stream, string body)
-        {
-            var result = new Apache.Arrow.Flight.Protocol.Result
-            {
-                Body = ByteString.CopyFromUtf8(body)
-            };
-            await stream.WriteAsync(result.ToByteArray()).ConfigureAwait(false);
-        }
-
-        private static async Task SendActionType(IServerStreamWriter<byte[]> stream, string type, string description)
-        {
-            var actionType = new Apache.Arrow.Flight.Protocol.ActionType
-            {
-                Type = type,
-                Description = description
-            };
-            await stream.WriteAsync(actionType.ToByteArray()).ConfigureAwait(false);
-        }
-
-        private static async Task SendSchema(IServerStreamWriter<byte[]> stream, Schema schema)
-        {
-            // Serialize the schema as an IPC message wrapped in FlightData.
-            var flightData = new Apache.Arrow.Flight.Protocol.FlightData
-            {
-                DataHeader = ByteString.CopyFrom(SerializeSchemaAsIpc(schema))
-            };
-            await stream.WriteAsync(flightData.ToByteArray()).ConfigureAwait(false);
-        }
-
-        private static async Task SendRecordBatch(IServerStreamWriter<byte[]> stream, RecordBatch batch, Schema schema)
-        {
-            // Serialize the record batch as IPC and wrap in FlightData.
-            byte[] ipcBytes = SerializeBatchAsIpc(batch, schema);
-            var flightData = new Apache.Arrow.Flight.Protocol.FlightData
-            {
-                DataHeader = ByteString.CopyFrom(ipcBytes)
-            };
-            await stream.WriteAsync(flightData.ToByteArray()).ConfigureAwait(false);
-        }
-
-        private static byte[] SerializeSchemaAsIpc(Schema schema)
+        private static byte[] SerializeSchemaIpc(Schema schema)
         {
             using (var ms = new System.IO.MemoryStream())
             {
-                var writer = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
-                // WriteStart sends the schema message.
-                writer.WriteStartAsync().Wait();
-                writer.WriteEndAsync().Wait();
-                writer.Dispose();
+                var w = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
+                w.WriteStartAsync().Wait();
+                w.WriteEndAsync().Wait();
+                w.Dispose();
                 return ms.ToArray();
             }
         }
 
-        private static byte[] SerializeBatchAsIpc(RecordBatch batch, Schema schema)
+        private static byte[] SerializeBatchIpc(RecordBatch batch, Schema schema)
         {
             using (var ms = new System.IO.MemoryStream())
             {
-                var writer = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
-                writer.WriteRecordBatchAsync(batch).Wait();
-                writer.Dispose();
+                var w = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
+                w.WriteRecordBatchAsync(batch).Wait();
+                w.Dispose();
                 return ms.ToArray();
             }
         }
