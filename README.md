@@ -79,6 +79,97 @@ with a **.NET 4.6.2** client library.
 
 ---
 
+## Building on Windows
+
+### Prerequisites
+
+1. **Visual Studio** (2017, 2019, or 2022) with the "Desktop development with C++" workload
+2. **CMake** ≥ 3.14 — https://cmake.org/download/
+3. **vcpkg** — package manager for C++ dependencies
+
+### 1. Install vcpkg
+
+```powershell
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+```
+
+> **Note:** You can clone vcpkg to any location. Replace `C:\vcpkg` in all
+> commands below with your chosen path.
+
+### 2. Install dependencies
+
+```powershell
+C:\vcpkg\vcpkg install "arrow[flight,parquet]:x64-windows" duckdb:x64-windows
+```
+
+### 3. Configure and build
+
+Open a terminal in the repository root and run the commands for your Visual Studio version.
+
+**Visual Studio 2017**
+```powershell
+cmake -B build -G "Visual Studio 15 2017" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows `
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --config Release -j
+```
+
+**Visual Studio 2019**
+```powershell
+cmake -B build -G "Visual Studio 16 2019" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows
+
+cmake --build build --config Release -j
+```
+
+**Visual Studio 2022**
+```powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows
+
+cmake --build build --config Release -j
+```
+
+> **Tip:** If vcpkg is installed somewhere other than `C:\vcpkg`, update the
+> `-DCMAKE_TOOLCHAIN_FILE=` path accordingly.
+
+The built executable will be at `build\Release\duckdb_flight_server.exe`.
+
+### 4. Run
+
+```powershell
+# In-memory database (default)
+.\build\Release\duckdb_flight_server.exe
+
+# Persistent database
+.\build\Release\duckdb_flight_server.exe --db C:\data\analytics.duckdb
+
+# With TLS
+.\build\Release\duckdb_flight_server.exe `
+  --tls-cert server.crt --tls-key server.key
+
+# Show all options
+.\build\Release\duckdb_flight_server.exe --help
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | `:memory:` | DuckDB file path |
+| `--host` | `0.0.0.0` | Bind address |
+| `--port` | `17777` | gRPC listen port |
+| `--readers` | `nCPU×2` | Read connection pool size |
+| `--batch-ms` | `5` | Write batch window (ms) |
+| `--batch-max` | `512` | Max writes per batch |
+| `--tls-cert` | — | TLS certificate PEM path |
+| `--tls-key` | — | TLS private key PEM path |
+
+---
+
 ## Quick start
 
 ### Server (Windows)
