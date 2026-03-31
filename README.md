@@ -61,7 +61,6 @@ with a **.NET 4.6.2** client library.
 ├── CHANGELOG.md
 ├── PROTOCOL.md                     Flight RPC surface description
 ├── BUILD_WINDOWS.md                Build guide (VS 2017)
-├── DuckDB-Arrow-Server-Design.pptx Architecture slides
 ├── CMakeLists.txt
 ├── vcpkg.json                      Pinned dependency versions for VS2017
 │
