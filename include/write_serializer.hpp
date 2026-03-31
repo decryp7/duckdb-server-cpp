@@ -46,6 +46,7 @@
  */
 
 #include "interfaces.hpp"
+#include "insert_batcher.hpp"
 #include <duckdb.h>
 #include <atomic>
 #include <cctype>          // std::isspace, std::isalpha, std::toupper
@@ -258,53 +259,56 @@ private:
     void execute_dml_run(std::vector<RequestPtr>& batch,
                          size_t from, size_t to)
     {
+        // Step 1: Merge compatible INSERTs into multi-row statements.
+        // This reduces DuckDB parse/plan overhead from N to 1 per group.
+        std::vector<std::string> sql_list;
+        sql_list.reserve(to - from);
+        for (size_t k = from; k < to; ++k)
+            sql_list.push_back(batch[k]->sql);
+
+        std::vector<BatchGroup> groups = merge_inserts(sql_list);
+
+        // Step 2: Begin transaction.
         if (!exec_sql("BEGIN")) {
-            // BEGIN itself failed — fall back to individual execution.
             for (size_t k = from; k < to; ++k) execute_single(*batch[k]);
             return;
         }
 
-        // Execute each statement inside the open transaction.
-        // Collect results into a temporary vector BEFORE setting any promise.
-        // Rationale: promises must be set only after COMMIT succeeds.
-        // Setting a promise to ok=true before COMMIT, then having COMMIT fail
-        // (e.g. disk full) would tell callers their write succeeded when it did not.
-        // Similarly, on rollback we must NOT have already called set_value, because
-        // execute_single would then throw std::future_error (promise already satisfied).
-        std::vector<WriteResult> results;
-        results.reserve(to - from);
+        // Step 3: Execute each merged group. Collect results BEFORE
+        // setting any promise (must wait for COMMIT to succeed).
+        std::vector<WriteResult> group_results;
+        group_results.reserve(groups.size());
 
         bool any_failed = false;
-        for (size_t k = from; k < to; ++k) {
-            WriteResult wr = exec_one(batch[k]->sql);
+        for (size_t g = 0; g < groups.size(); ++g) {
+            WriteResult wr = exec_one(groups[g].sql);
             if (!wr.ok) {
                 any_failed = true;
                 break;
             }
-            results.push_back(std::move(wr));
+            group_results.push_back(std::move(wr));
         }
 
         if (any_failed) {
-            // Roll back and retry each statement individually.
-            // No promises have been set yet, so execute_single is safe for all.
             exec_sql("ROLLBACK");
             for (size_t k = from; k < to; ++k)
                 execute_single(*batch[k]);
             return;
         }
 
-        // All statements executed without error — attempt to commit.
+        // Step 4: Commit.
         if (!exec_sql("COMMIT")) {
-            // COMMIT failed (e.g. disk full, WAL error).
-            // Retry individually so each caller gets an accurate result.
             for (size_t k = from; k < to; ++k)
                 execute_single(*batch[k]);
             return;
         }
 
-        // COMMIT succeeded — now it is safe to resolve the promises with success.
-        for (size_t k = from; k < to; ++k)
-            batch[k]->promise.set_value(std::move(results[k - from]));
+        // Step 5: COMMIT succeeded — resolve promises.
+        // Map group results back to individual requests.
+        for (size_t g = 0; g < groups.size(); ++g) {
+            for (size_t idx : groups[g].request_indices)
+                batch[from + idx]->promise.set_value(group_results[g]);
+        }
     }
 
     /**

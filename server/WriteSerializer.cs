@@ -11,9 +11,11 @@ namespace DuckArrowServer
     /// How it works:
     ///   1. Callers submit SQL via Submit(). Each call blocks until done.
     ///   2. A background thread collects requests over a short time window.
-    ///   3. DML statements in the window are wrapped in one BEGIN...COMMIT.
-    ///   4. DDL statements (CREATE, DROP, etc.) run individually.
-    ///   5. If any DML fails, the batch rolls back and each is retried alone.
+    ///   3. Before executing, consecutive INSERTs to the same table are
+    ///      merged into multi-row INSERTs (much faster — parse once, not N times).
+    ///   4. Merged DML statements are wrapped in one BEGIN...COMMIT.
+    ///   5. DDL statements (CREATE, DROP, etc.) run individually.
+    ///   6. If any DML fails, the batch rolls back and each is retried alone.
     /// </summary>
     public sealed class WriteSerializer : IWriteSerializer
     {
@@ -54,7 +56,6 @@ namespace DuckArrowServer
                 Monitor.Pulse(lockObj);
             }
 
-            // Wait until the writer thread finishes this request.
             request.DoneSignal.WaitOne();
             return request.Result;
         }
@@ -74,32 +75,25 @@ namespace DuckArrowServer
             while (true)
             {
                 var batch = CollectBatch();
-                if (batch.Count == 0) break; // stop signal, queue empty
+                if (batch.Count == 0) break;
                 ExecuteBatch(batch);
             }
         }
 
-        /// <summary>
-        /// Wait for requests to arrive, then collect a batch.
-        /// Returns an empty list when it's time to shut down.
-        /// </summary>
         private List<WriteRequest> CollectBatch()
         {
             var batch = new List<WriteRequest>();
 
             lock (lockObj)
             {
-                // Wait for work or stop signal.
                 while (queue.Count == 0 && !stop)
                     Monitor.Wait(lockObj);
 
                 if (stop && queue.Count == 0)
-                    return batch; // empty = shut down
+                    return batch;
 
-                // Take everything currently in the queue.
                 MoveQueueToBatch(batch);
 
-                // Wait a short time for more requests to arrive.
                 if (batch.Count < batchMax)
                 {
                     Monitor.Wait(lockObj, batchWindowMs);
@@ -121,6 +115,7 @@ namespace DuckArrowServer
         /// <summary>
         /// Execute a batch of requests. DDL runs individually.
         /// Consecutive DML runs are grouped into transactions.
+        /// Within each DML run, compatible INSERTs are merged into multi-row statements.
         /// </summary>
         private void ExecuteBatch(List<WriteRequest> batch)
         {
@@ -129,13 +124,11 @@ namespace DuckArrowServer
             {
                 if (DdlDetector.IsDdl(batch[i].Sql))
                 {
-                    // DDL cannot be inside a transaction. Run it alone.
                     RunSingleStatement(batch[i]);
                     i++;
                 }
                 else
                 {
-                    // Find how many consecutive DML statements we have.
                     int end = FindEndOfDmlRun(batch, i);
                     RunDmlTransaction(batch, i, end);
                     i = end;
@@ -143,9 +136,6 @@ namespace DuckArrowServer
             }
         }
 
-        /// <summary>
-        /// Find the index where the DML run ends (first DDL or end of list).
-        /// </summary>
         private static int FindEndOfDmlRun(List<WriteRequest> batch, int start)
         {
             int end = start + 1;
@@ -156,34 +146,40 @@ namespace DuckArrowServer
 
         /// <summary>
         /// Run a group of DML statements in one BEGIN...COMMIT transaction.
-        /// If anything fails, roll back and retry each statement individually.
+        /// Before executing, merge compatible INSERTs into multi-row statements.
         /// </summary>
         private void RunDmlTransaction(List<WriteRequest> batch, int from, int to)
         {
-            // Step 1: Try to begin a transaction.
+            // Step 1: Merge compatible INSERTs into multi-row statements.
+            var sqlList = new List<string>(to - from);
+            for (int i = from; i < to; i++)
+                sqlList.Add(batch[i].Sql);
+
+            var groups = InsertBatcher.MergeInserts(sqlList);
+
+            // Step 2: Begin transaction.
             if (!TryExecuteControl("BEGIN"))
             {
                 RunEachIndividually(batch, from, to);
                 return;
             }
 
-            // Step 2: Run each DML statement. Collect results but don't
-            // signal callers yet -- we need COMMIT to succeed first.
-            var results = new List<WriteResult>();
+            // Step 3: Execute each group. Collect results per group.
+            var groupResults = new List<WriteResult>();
             bool allSucceeded = true;
 
-            for (int i = from; i < to; i++)
+            for (int g = 0; g < groups.Count; g++)
             {
-                var result = TryExecute(batch[i].Sql);
+                var result = TryExecute(groups[g].Sql);
                 if (!result.Ok)
                 {
                     allSucceeded = false;
                     break;
                 }
-                results.Add(result);
+                groupResults.Add(result);
             }
 
-            // Step 3: If any statement failed, roll back and retry each alone.
+            // Step 4: If any failed, roll back and retry each individually.
             if (!allSucceeded)
             {
                 TryExecuteControl("ROLLBACK");
@@ -191,34 +187,31 @@ namespace DuckArrowServer
                 return;
             }
 
-            // Step 4: Try to commit. If COMMIT fails, retry each alone.
+            // Step 5: Commit.
             if (!TryExecuteControl("COMMIT"))
             {
                 RunEachIndividually(batch, from, to);
                 return;
             }
 
-            // Step 5: COMMIT succeeded! Tell all callers their write is done.
-            for (int i = from; i < to; i++)
+            // Step 6: Signal all callers. Map group results back to individual requests.
+            for (int g = 0; g < groups.Count; g++)
             {
-                batch[i].Result = results[i - from];
-                batch[i].DoneSignal.Set();
+                var group = groups[g];
+                foreach (int idx in group.RequestIndices)
+                {
+                    batch[from + idx].Result = groupResults[g];
+                    batch[from + idx].DoneSignal.Set();
+                }
             }
         }
 
-        /// <summary>
-        /// Run each request individually (outside a transaction).
-        /// Used as a fallback when the batch transaction fails.
-        /// </summary>
         private void RunEachIndividually(List<WriteRequest> batch, int from, int to)
         {
             for (int i = from; i < to; i++)
                 RunSingleStatement(batch[i]);
         }
 
-        /// <summary>
-        /// Run one SQL statement and signal the caller when done.
-        /// </summary>
         private void RunSingleStatement(WriteRequest request)
         {
             request.Result = TryExecute(request.Sql);
@@ -227,9 +220,6 @@ namespace DuckArrowServer
 
         // ── SQL execution helpers ────────────────────────────────────────────
 
-        /// <summary>
-        /// Execute a SQL statement and return the result.
-        /// </summary>
         private WriteResult TryExecute(string sql)
         {
             try
@@ -247,10 +237,6 @@ namespace DuckArrowServer
             }
         }
 
-        /// <summary>
-        /// Execute a control statement (BEGIN, COMMIT, ROLLBACK).
-        /// Returns true if it worked.
-        /// </summary>
         private bool TryExecuteControl(string sql)
         {
             return TryExecute(sql).Ok;
