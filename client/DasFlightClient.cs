@@ -4,8 +4,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
-using Apache.Arrow.Flight;
-using Apache.Arrow.Flight.Client;
+using Apache.Arrow.Ipc;
+using Google.Protobuf;
 using Grpc.Core;
 
 namespace DuckArrowClient
@@ -14,56 +14,42 @@ namespace DuckArrowClient
     /// Thread-safe Arrow Flight client for the DuckDB Flight Server.
     /// Implements <see cref="IDasFlightClient"/>.
     ///
-    /// <para><b>One instance per application</b></para>
-    /// <para>
-    /// Arrow Flight runs over gRPC / HTTP/2, which multiplexes many concurrent
-    /// RPCs over a single TCP connection.  Create ONE DasFlightClient per target
-    /// server and share it across all threads.  A connection pool is not needed
-    /// and would be counterproductive (more channels means more TCP connections,
-    /// not more throughput).
-    /// </para>
+    /// Uses raw gRPC with manual proto encoding because Apache.Arrow.Flight 14
+    /// FlightClient requires Grpc.Net.Client (needs .NET 5+), which is
+    /// incompatible with .NET Framework 4.6.2 / Grpc.Core.
     ///
-    /// <para><b>TLS</b></para>
-    /// <para>
-    /// Use the <see cref="DasFlightClient(string,int,ChannelCredentials)"/>
-    /// constructor with <c>new SslCredentials(caPem)</c> to enable TLS.
-    /// </para>
-    ///
-    /// <para><b>Disposal</b></para>
-    /// <para>
-    /// Call <see cref="Dispose"/> when the application shuts down.  The method
-    /// waits up to 5 seconds for in-flight RPCs to complete before closing the
-    /// underlying gRPC channel.
-    /// </para>
+    /// One instance per application — HTTP/2 handles all concurrency.
     /// </summary>
     public sealed class DasFlightClient : IDasFlightClient
     {
-        private readonly Channel      _channel;
-        private readonly FlightClient _flight;
-        private int                   _disposed; // 0 = alive, 1 = disposed; use Interlocked
+        private readonly Channel _channel;
+        private readonly CallInvoker _invoker;
+        private int _disposed;
 
-        // ── Construction ──────────────────────────────────────────────────────
+        // ── gRPC method definitions (raw byte[] marshalling) ─────────────────
 
-        /// <summary>
-        /// Connect to a plaintext (non-TLS) Flight server.
-        /// </summary>
-        /// <param name="host">DNS name or IP address of the server.</param>
-        /// <param name="port">gRPC listen port (default 17777).</param>
+        private static readonly Marshaller<byte[]> RawMarshaller = new Marshaller<byte[]>(
+            bytes => bytes,
+            bytes => bytes);
+
+        private static readonly Method<byte[], byte[]> DoGetMethod = new Method<byte[], byte[]>(
+            MethodType.ServerStreaming,
+            "arrow.flight.protocol.FlightService",
+            "DoGet",
+            RawMarshaller, RawMarshaller);
+
+        private static readonly Method<byte[], byte[]> DoActionMethod = new Method<byte[], byte[]>(
+            MethodType.ServerStreaming,
+            "arrow.flight.protocol.FlightService",
+            "DoAction",
+            RawMarshaller, RawMarshaller);
+
+        // ── Construction ─────────────────────────────────────────────────────
+
         public DasFlightClient(string host = "localhost", int port = 17777)
-            : this(new Channel(
-                host + ":" + port,
-                ChannelCredentials.Insecure))
+            : this(new Channel(host + ":" + port, ChannelCredentials.Insecure))
         { }
 
-        /// <summary>
-        /// Connect with a custom channel credential (e.g. TLS).
-        /// </summary>
-        /// <param name="host">DNS name or IP address of the server.</param>
-        /// <param name="port">gRPC listen port.</param>
-        /// <param name="credentials">
-        /// gRPC channel credentials.  Use <c>new SslCredentials(caPem)</c>
-        /// for TLS with a custom CA certificate.
-        /// </param>
         public DasFlightClient(string host, int port, ChannelCredentials credentials)
             : this(new Channel(host + ":" + port, credentials))
         { }
@@ -71,167 +57,148 @@ namespace DuckArrowClient
         private DasFlightClient(Channel channel)
         {
             _channel = channel;
-            _flight  = new FlightClient(_channel.CreateCallInvoker());
+            _invoker = channel.CreateCallInvoker();
         }
 
-        // ── IDasFlightClient — read queries ───────────────────────────────────
+        // ── IDasFlightClient — read queries ──────────────────────────────────
 
-        /// <inheritdoc/>
-        public IFlightQueryResult Query(
-            string sql, CancellationToken ct = default)
+        public IFlightQueryResult Query(string sql, CancellationToken ct = default)
         {
-            // Task.Run prevents SynchronizationContext deadlock on UI threads.
             return Task.Run(() => QueryAsync(sql, ct)).GetAwaiter().GetResult();
         }
 
-        /// <inheritdoc/>
-        public async Task<IFlightQueryResult> QueryAsync(
-            string sql, CancellationToken ct = default)
+        public async Task<IFlightQueryResult> QueryAsync(string sql, CancellationToken ct = default)
         {
             EnsureNotDisposed();
-            var ticket = new FlightTicket(Encoding.UTF8.GetBytes(sql));
+
+            // Build the Ticket proto message: field 1 = bytes.
+            byte[] ticketProto = EncodeTicket(Encoding.UTF8.GetBytes(sql));
 
             var batches = new List<RecordBatch>();
+            Schema schema = null;
+
             try
             {
-                var stream = _flight.GetStream(ticket);
-                Schema schema = await stream.Schema.ConfigureAwait(false);
-
-                RecordBatch batch;
-                while ((batch = await stream
-                    .ReadNextRecordBatchAsync(ct)
-                    .ConfigureAwait(false)) != null)
+                using (var call = _invoker.AsyncServerStreamingCall(DoGetMethod, null, new CallOptions(cancellationToken: ct), ticketProto))
                 {
-                    batches.Add(batch);
+                    while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
+                    {
+                        byte[] flightDataBytes = call.ResponseStream.Current;
+
+                        // Decode FlightData proto: extract IPC data.
+                        byte[] ipcData = DecodeFlightDataHeader(flightDataBytes);
+                        if (ipcData == null || ipcData.Length == 0) continue;
+
+                        // Parse the IPC message to get schema or record batch.
+                        using (var ms = new System.IO.MemoryStream(ipcData))
+                        using (var reader = new ArrowStreamReader(ms))
+                        {
+                            RecordBatch batch;
+                            while ((batch = reader.ReadNextRecordBatch()) != null)
+                            {
+                                if (schema == null)
+                                    schema = reader.Schema;
+                                if (batch.Length > 0)
+                                    batches.Add(batch);
+                                else
+                                    batch.Dispose();
+                            }
+                            if (schema == null)
+                                schema = reader.Schema;
+                        }
+                    }
                 }
+
+                if (schema == null)
+                    schema = new Schema(new List<Field>(), null);
 
                 return new FlightQueryResult(schema, batches);
             }
             catch (RpcException ex)
             {
-                // Dispose any batches already collected before re-throwing,
-                // otherwise the Arrow column buffers leak.
                 foreach (var b in batches) b?.Dispose();
-                throw new DasException(
-                    "Flight DoGet failed: " + ex.Status.Detail, ex);
+                throw new DasException("Flight DoGet failed: " + ex.Status.Detail, ex);
             }
             catch (Exception)
             {
-                // Covers OperationCanceledException (ct cancelled mid-stream)
-                // and any other unexpected exception.  Dispose collected batches
-                // to prevent Arrow column buffer leaks, then re-throw as-is
-                // so the caller receives the original exception type
-                // (e.g. OperationCanceledException preserves cancellation semantics).
                 foreach (var b in batches) b?.Dispose();
                 throw;
             }
         }
 
-        // ── IDasFlightClient — write / DDL ────────────────────────────────────
+        // ── IDasFlightClient — write / DDL ───────────────────────────────────
 
-        /// <inheritdoc/>
         public void Execute(string sql, CancellationToken ct = default)
         {
-            // Task.Run prevents SynchronizationContext deadlock on UI threads.
             Task.Run(() => ExecuteAsync(sql, ct)).GetAwaiter().GetResult();
         }
 
-        /// <inheritdoc/>
         public async Task ExecuteAsync(string sql, CancellationToken ct = default)
         {
             EnsureNotDisposed();
-            await DoActionAndDrain("execute", sql, ct).ConfigureAwait(false);
+            await DoActionAndDrain("execute", Encoding.UTF8.GetBytes(sql), ct).ConfigureAwait(false);
         }
 
-        // ── IDasFlightClient — liveness / metrics ─────────────────────────────
+        // ── IDasFlightClient — liveness / metrics ────────────────────────────
 
-        /// <inheritdoc/>
         public void Ping()
         {
             EnsureNotDisposed();
-            // Use Task.Run to execute on a thread-pool thread, avoiding deadlock
-            // when called from a WPF/WinForms UI thread that has a
-            // SynchronizationContext. Without Task.Run, GetAwaiter().GetResult()
-            // would block the UI thread while the async continuation tries to
-            // resume on the same UI thread — a classic deadlock.
-            string body = Task.Run(() => DoActionFirstResult("ping"))
+            string body = Task.Run(() => DoActionFirstResult("ping", new byte[0]))
                               .GetAwaiter().GetResult();
             if (body != "pong")
-                throw new DasException(
-                    "Ping: unexpected response body '" + body + "' (expected 'pong')");
+                throw new DasException("Ping: unexpected response '" + body + "' (expected 'pong')");
         }
 
-        /// <inheritdoc/>
         public string GetStats()
         {
             EnsureNotDisposed();
-            // Task.Run prevents deadlock when called from a UI thread with
-            // a SynchronizationContext (WPF, WinForms).
-            return Task.Run(() => DoActionFirstResult("stats"))
+            return Task.Run(() => DoActionFirstResult("stats", new byte[0]))
                         .GetAwaiter().GetResult();
         }
 
-        // ── Internal helpers ──────────────────────────────────────────────────
+        // ── Internal helpers ─────────────────────────────────────────────────
 
-        /// <summary>
-        /// Send a DoAction RPC with the given type and body, draining the
-        /// result stream (and propagating any gRPC error as DasException).
-        /// Used for execute, ping, and any action whose result we do not need.
-        /// </summary>
-        private async Task DoActionAndDrain(
-            string actionType,
-            string body,
-            CancellationToken ct)
+        private async Task DoActionAndDrain(string actionType, byte[] body, CancellationToken ct)
         {
-            var action = new FlightAction(
-                actionType,
-                body.Length > 0 ? Encoding.UTF8.GetBytes(body) : Array.Empty<byte>());
+            byte[] actionProto = EncodeAction(actionType, body);
             try
             {
-                var call = _flight.DoAction(action);
-                while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
-                { /* drain — result is intentionally ignored */ }
+                using (var call = _invoker.AsyncServerStreamingCall(DoActionMethod, null, new CallOptions(cancellationToken: ct), actionProto))
+                {
+                    while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
+                    { /* drain */ }
+                }
             }
             catch (RpcException ex)
             {
-                throw new DasException(
-                    "Flight DoAction(" + actionType + ") failed: " + ex.Status.Detail,
-                    ex);
+                throw new DasException("Flight DoAction(" + actionType + ") failed: " + ex.Status.Detail, ex);
             }
         }
 
-        /// <summary>
-        /// Send a DoAction RPC and return the body of the first result item.
-        /// Returns an empty string if the stream has no items.
-        /// Used for stats.
-        /// </summary>
-        private async Task<string> DoActionFirstResult(string actionType)
+        private async Task<string> DoActionFirstResult(string actionType, byte[] body)
         {
-            var action = new FlightAction(actionType, Array.Empty<byte>());
+            byte[] actionProto = EncodeAction(actionType, body);
             try
             {
-                var call = _flight.DoAction(action);
-                // Collect the first non-null body but continue draining the stream
-                // to completion.  Returning early from the loop while the server still
-                // has results queued leaves the gRPC call in an incomplete state,
-                // which can cause resource leaks and server-side warnings.
-                string firstBody = string.Empty;
-                while (await call.ResponseStream
-                    .MoveNext(CancellationToken.None)
-                    .ConfigureAwait(false))
+                using (var call = _invoker.AsyncServerStreamingCall(DoActionMethod, null, new CallOptions(), actionProto))
                 {
-                    var body = call.ResponseStream.Current.Body;
-                    if (body != null && firstBody.Length == 0)
-                        firstBody = Encoding.UTF8.GetString(body.ToArray());
-                    // Continue iterating to drain the stream fully.
+                    string firstBody = string.Empty;
+                    while (await call.ResponseStream.MoveNext(CancellationToken.None).ConfigureAwait(false))
+                    {
+                        if (firstBody.Length == 0)
+                        {
+                            byte[] resultBytes = DecodeResultBody(call.ResponseStream.Current);
+                            if (resultBytes != null)
+                                firstBody = Encoding.UTF8.GetString(resultBytes);
+                        }
+                    }
+                    return firstBody;
                 }
-                return firstBody;
             }
             catch (RpcException ex)
             {
-                throw new DasException(
-                    "Flight DoAction(" + actionType + ") failed: " + ex.Status.Detail,
-                    ex);
+                throw new DasException("Flight DoAction(" + actionType + ") failed: " + ex.Status.Detail, ex);
             }
         }
 
@@ -241,19 +208,78 @@ namespace DuckArrowClient
                 throw new ObjectDisposedException(nameof(DasFlightClient));
         }
 
-        // ── IDisposable ───────────────────────────────────────────────────────
+        // ── Proto encoding/decoding ──────────────────────────────────────────
 
-        /// <summary>
-        /// Gracefully shut down the gRPC channel.
-        /// Waits up to 5 seconds for in-flight RPCs to complete.
-        /// </summary>
+        /// <summary>Encode Ticket proto: field 1 = bytes.</summary>
+        private static byte[] EncodeTicket(byte[] ticket)
+        {
+            using (var ms = new System.IO.MemoryStream())
+            {
+                var cos = new CodedOutputStream(ms);
+                cos.WriteTag(1, WireFormat.WireType.LengthDelimited);
+                cos.WriteBytes(ByteString.CopyFrom(ticket));
+                cos.Flush();
+                return ms.ToArray();
+            }
+        }
+
+        /// <summary>Encode Action proto: field 1 = string type, field 2 = bytes body.</summary>
+        private static byte[] EncodeAction(string type, byte[] body)
+        {
+            using (var ms = new System.IO.MemoryStream())
+            {
+                var cos = new CodedOutputStream(ms);
+                cos.WriteTag(1, WireFormat.WireType.LengthDelimited);
+                cos.WriteString(type);
+                if (body != null && body.Length > 0)
+                {
+                    cos.WriteTag(2, WireFormat.WireType.LengthDelimited);
+                    cos.WriteBytes(ByteString.CopyFrom(body));
+                }
+                cos.Flush();
+                return ms.ToArray();
+            }
+        }
+
+        /// <summary>Decode FlightData proto: extract data_header (field 2).</summary>
+        private static byte[] DecodeFlightDataHeader(byte[] data)
+        {
+            var input = new CodedInputStream(data);
+            byte[] header = null;
+            uint tag;
+            while ((tag = input.ReadTag()) != 0)
+            {
+                if (tag == 18) // field 2, wire type 2
+                    header = input.ReadBytes().ToByteArray();
+                else
+                    input.SkipLastField();
+            }
+            return header;
+        }
+
+        /// <summary>Decode Result proto: extract body (field 1).</summary>
+        private static byte[] DecodeResultBody(byte[] data)
+        {
+            var input = new CodedInputStream(data);
+            byte[] body = null;
+            uint tag;
+            while ((tag = input.ReadTag()) != 0)
+            {
+                if (tag == 10) // field 1, wire type 2
+                    body = input.ReadBytes().ToByteArray();
+                else
+                    input.SkipLastField();
+            }
+            return body;
+        }
+
+        // ── IDisposable ──────────────────────────────────────────────────────
+
         public void Dispose()
         {
-            // Interlocked.CompareExchange atomically sets _disposed to 1 only if it was 0.
-            // Returns the original value; if it was already 1, another thread got here first.
             if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
             try { _channel.ShutdownAsync().Wait(TimeSpan.FromSeconds(5)); }
-            catch { /* best-effort — ignore errors during shutdown */ }
+            catch { /* best-effort */ }
         }
     }
 }
