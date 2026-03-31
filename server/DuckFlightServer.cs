@@ -93,8 +93,14 @@ namespace DuckArrowServer
                         RecordBatch batch;
                         while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, BatchSize)) != null)
                         {
-                            await responseStream.WriteAsync(batch).ConfigureAwait(false);
-                            batch.Dispose();
+                            try
+                            {
+                                await responseStream.WriteAsync(batch).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                batch.Dispose();
+                            }
                         }
                     }
                 }
