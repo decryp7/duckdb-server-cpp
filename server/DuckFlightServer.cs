@@ -83,12 +83,18 @@ namespace DuckArrowServer
                     {
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
-                        // Stream batches until there are no more rows.
+                        // Always send the schema first. Without this, empty result
+                        // sets (zero rows) would close the stream without a schema,
+                        // causing the client to hang on "await stream.Schema".
+                        var emptyBatch = new RecordBatch(schema, new IArrowArray[0], 0);
+                        await responseStream.WriteAsync(emptyBatch).ConfigureAwait(false);
+
+                        // Stream data batches until there are no more rows.
                         RecordBatch batch;
                         while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, BatchSize)) != null)
                         {
                             await responseStream.WriteAsync(batch).ConfigureAwait(false);
-                            batch.Dispose(); // Release Arrow memory buffers after sending.
+                            batch.Dispose();
                         }
                     }
                 }
