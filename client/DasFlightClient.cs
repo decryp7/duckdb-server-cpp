@@ -90,13 +90,13 @@ namespace DuckArrowClient
         {
             EnsureNotDisposed();
             var ticket = new FlightTicket(Encoding.UTF8.GetBytes(sql));
-            var stream = _flight.GetStream(ticket);
-
-            Schema schema = await stream.Schema.ConfigureAwait(false);
 
             var batches = new List<RecordBatch>();
             try
             {
+                var stream = _flight.GetStream(ticket);
+                Schema schema = await stream.Schema.ConfigureAwait(false);
+
                 RecordBatch batch;
                 while ((batch = await stream
                     .ReadNextRecordBatchAsync(ct)
@@ -104,6 +104,8 @@ namespace DuckArrowClient
                 {
                     batches.Add(batch);
                 }
+
+                return new FlightQueryResult(schema, batches);
             }
             catch (RpcException ex)
             {
@@ -123,7 +125,6 @@ namespace DuckArrowClient
                 foreach (var b in batches) b?.Dispose();
                 throw;
             }
-            return new FlightQueryResult(schema, batches);
         }
 
         // ── IDasFlightClient — write / DDL ────────────────────────────────────

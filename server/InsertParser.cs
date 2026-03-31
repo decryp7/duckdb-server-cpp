@@ -69,10 +69,30 @@ namespace DuckArrowServer
 
             pos = SkipSpaces(sql, pos);
 
-            // Read the table name.
+            // Read the table name (may be quoted with double quotes).
             int tableStart = pos;
-            while (pos < sql.Length && !char.IsWhiteSpace(sql[pos]) && sql[pos] != '(')
+            if (pos < sql.Length && sql[pos] == '"')
+            {
+                // Quoted identifier: skip to closing quote.
                 pos++;
+                while (pos < sql.Length)
+                {
+                    if (sql[pos] == '"')
+                    {
+                        if (pos + 1 < sql.Length && sql[pos + 1] == '"')
+                            pos += 2; // escaped double-quote
+                        else
+                            { pos++; break; }
+                    }
+                    else
+                        pos++;
+                }
+            }
+            else
+            {
+                while (pos < sql.Length && !char.IsWhiteSpace(sql[pos]) && sql[pos] != '(')
+                    pos++;
+            }
 
             if (pos == tableStart)
                 return result;

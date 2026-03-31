@@ -77,11 +77,26 @@ inline ParsedInsert try_parse_insert(const std::string& sql) {
     if (!match_keyword(sql, pos, "INTO", pos)) return result;
     pos = skip_spaces(sql, pos);
 
-    // Read table name
+    // Read table name (may be quoted with double quotes)
     size_t table_start = pos;
-    while (pos < sql.size() && !std::isspace(static_cast<unsigned char>(sql[pos]))
-           && sql[pos] != '(')
+    if (pos < sql.size() && sql[pos] == '"') {
+        // Quoted identifier: skip to closing quote.
         ++pos;
+        while (pos < sql.size()) {
+            if (sql[pos] == '"') {
+                if (pos + 1 < sql.size() && sql[pos + 1] == '"')
+                    pos += 2; // escaped double-quote
+                else
+                    { ++pos; break; }
+            } else {
+                ++pos;
+            }
+        }
+    } else {
+        while (pos < sql.size() && !std::isspace(static_cast<unsigned char>(sql[pos]))
+               && sql[pos] != '(')
+            ++pos;
+    }
     if (pos == table_start) return result;
 
     std::string table_name = sql.substr(table_start, pos - table_start);

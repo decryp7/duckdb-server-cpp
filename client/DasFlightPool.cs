@@ -95,6 +95,7 @@ namespace DuckArrowClient
         /// <inheritdoc/>
         public IPoolLease Borrow(CancellationToken ct = default)
         {
+            EnsureNotDisposed();
             _sem.Wait(ct);
             return TakeLease();
         }
@@ -102,8 +103,15 @@ namespace DuckArrowClient
         /// <inheritdoc/>
         public async Task<IPoolLease> BorrowAsync(CancellationToken ct = default)
         {
+            EnsureNotDisposed();
             await _sem.WaitAsync(ct).ConfigureAwait(false);
             return TakeLease();
+        }
+
+        private void EnsureNotDisposed()
+        {
+            if (Thread.VolatileRead(ref _disposed) != 0)
+                throw new ObjectDisposedException(nameof(DasFlightPool));
         }
 
         // ── Internal helpers ──────────────────────────────────────────────────

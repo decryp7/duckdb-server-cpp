@@ -93,8 +93,9 @@ namespace DuckArrowBenchmark
             using (var client = new DasFlightClient(host, port))
             {
                 // Create the test table.
-                client.Execute("CREATE TABLE IF NOT EXISTS bench_write (id INTEGER, value DOUBLE, label TEXT)");
-                client.Execute("DELETE FROM bench_write");
+                // Drop and recreate to avoid leftover data from previous runs.
+                client.Execute("DROP TABLE IF EXISTS bench_write");
+                client.Execute("CREATE TABLE bench_write (id INTEGER, value DOUBLE, label TEXT)");
 
                 var tracker = new LatencyTracker();
                 var stopwatch = Stopwatch.StartNew();
@@ -128,9 +129,12 @@ namespace DuckArrowBenchmark
         {
             for (int i = 0; i < ops; i++)
             {
+                int id = clientId * 100000 + i;
+                double value = clientId + (i * 0.001);
                 string sql = string.Format(
-                    "INSERT INTO bench_write VALUES ({0}, {1}.{2}, 'client_{0}_op_{3}')",
-                    clientId * 100000 + i, clientId, i, i);
+                    "INSERT INTO bench_write VALUES ({0}, {1}, 'client_{2}_op_{3}')",
+                    id, value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    clientId, i);
 
                 var sw = Stopwatch.StartNew();
                 try

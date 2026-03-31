@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Threading;
 using Apache.Arrow;
 using Apache.Arrow.Types;
 
@@ -15,7 +16,7 @@ namespace DuckArrowClient
     public sealed class FlightQueryResult : IFlightQueryResult
     {
         private readonly List<RecordBatch> _batches;
-        private bool _disposed;
+        private int _disposed; // 0 = alive, 1 = disposed; use Interlocked
 
         /// <inheritdoc/>
         public Schema Schema { get; }
@@ -81,8 +82,7 @@ namespace DuckArrowClient
         /// <summary>Disposes all underlying Arrow record batches.</summary>
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
             foreach (var b in _batches) b?.Dispose();
         }
     }

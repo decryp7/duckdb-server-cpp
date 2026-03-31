@@ -91,12 +91,23 @@ public:
         if (duckdb_open(path, &db_) == DuckDBError)
             throw std::runtime_error("ConnectionPool: failed to open database: " + db_path);
 
-        init_connections();
+        try {
+            init_connections();
+        } catch (...) {
+            // init_connections cleans up its own connections on failure,
+            // but we must close the database we opened.
+            duckdb_close(&db_);
+            throw;
+        }
     }
 
-    /** @brief Destroys all idle connections and, if owned, closes the database. */
+    /** @brief Destroys all idle connections and, if owned, closes the database.
+     *  Waits for all borrowed connections to be returned before destroying. */
     ~ConnectionPool() {
         std::unique_lock<std::mutex> lock(mu_);
+        // Wait until all borrowed connections have been returned.
+        // Without this, Handle destructors would write to a destroyed queue.
+        cv_.wait(lock, [this] { return idle_.size() == pool_size_; });
         while (!idle_.empty()) {
             duckdb_disconnect(&idle_.front());
             idle_.pop();
@@ -191,13 +202,23 @@ private:
      * @throws std::runtime_error if any connection fails.
      */
     void init_connections() {
-        for (size_t i = 0; i < pool_size_; ++i) {
-            duckdb_connection conn;
-            if (duckdb_connect(db_, &conn) == DuckDBError)
-                throw std::runtime_error(
-                    "ConnectionPool: failed to create connection "
-                    + std::to_string(i + 1) + "/" + std::to_string(pool_size_));
-            idle_.push(conn);
+        try {
+            for (size_t i = 0; i < pool_size_; ++i) {
+                duckdb_connection conn;
+                if (duckdb_connect(db_, &conn) == DuckDBError)
+                    throw std::runtime_error(
+                        "ConnectionPool: failed to create connection "
+                        + std::to_string(i + 1) + "/" + std::to_string(pool_size_));
+                idle_.push(conn);
+            }
+        } catch (...) {
+            // Clean up connections created so far.
+            while (!idle_.empty()) {
+                duckdb_disconnect(&idle_.front());
+                idle_.pop();
+            }
+            pool_size_ = 0; // prevent destructor wait
+            throw;
         }
     }
 
