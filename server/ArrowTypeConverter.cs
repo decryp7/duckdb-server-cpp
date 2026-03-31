@@ -171,7 +171,7 @@ namespace DuckArrowServer
         {
             var b = new BinaryArray.Builder();
             foreach (var v in values)
-                if (v == null) b.AppendNull(); else b.Append((byte[])v);
+                if (v == null) b.AppendNull(); else b.Append(new ReadOnlySpan<byte>((byte[])v));
             return b.Build();
         }
 

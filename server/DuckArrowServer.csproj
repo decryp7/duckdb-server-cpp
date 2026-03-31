@@ -48,7 +48,7 @@
       <HintPath>packages\Grpc.Core.Api.2.46.6\lib\netstandard2.0\Grpc.Core.Api.dll</HintPath>
     </Reference>
     <Reference Include="Google.Protobuf">
-      <HintPath>packages\Google.Protobuf.3.21.12\lib\net45\Google.Protobuf.dll</HintPath>
+      <HintPath>packages\Google.Protobuf.3.24.4\lib\net45\Google.Protobuf.dll</HintPath>
     </Reference>
     <Reference Include="DuckDB.NET.Data">
       <HintPath>packages\DuckDB.NET.Data.Full.1.1.1\lib\netstandard2.0\DuckDB.NET.Data.dll</HintPath>
