@@ -38,7 +38,7 @@ namespace DuckArrowServer
             this.config = config;
             this.readPool = readPool;
             this.writer = writer;
-            this.batchSize = config.batchSize > 0 ? config.batchSize : 8192;
+            this.batchSize = config.BatchSize > 0 ? config.BatchSize : 8192;
         }
 
         /// <summary>Get a snapshot of live server metrics.</summary>
