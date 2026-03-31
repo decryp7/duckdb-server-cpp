@@ -63,6 +63,7 @@ with a **.NET 4.6.2** client library.
 ├── BUILD_WINDOWS.md                Build guide (VS 2017)
 ├── DuckDB-Arrow-Server-Design.pptx Architecture slides
 ├── CMakeLists.txt
+├── vcpkg.json                      Pinned dependency versions for VS2017
 │
 ├── include/
 │   ├── flight_server.hpp           DuckFlightServer + ServerConfig
@@ -100,6 +101,11 @@ with a **.NET 4.6.2** client library.
 > **Important:** CMake 3.28+ dropped the Visual Studio 2017 generator.
 > Use CMake **3.27.9 or earlier** when building with VS2017.
 
+> **Important:** Arrow Flight depends on gRPC → Protobuf → Abseil, and
+> Abseil requires VS2019+ in recent versions. This project uses a pinned
+> `vcpkg.json` baseline (September 2022) to lock dependencies to versions
+> that still support VS2017: **Arrow 9.0**, **Protobuf 3.21.x** (no Abseil).
+
 ### 1. Install vcpkg
 
 ```powershell
@@ -110,13 +116,11 @@ C:\vcpkg\bootstrap-vcpkg.bat
 > **Note:** You can clone vcpkg to any location. Replace `C:\vcpkg` in all
 > commands below with your chosen path.
 
-### 2. Install dependencies
+### 2. Configure and build
 
-```powershell
-C:\vcpkg\vcpkg install "arrow[flight,parquet]:x64-windows" duckdb:x64-windows
-```
-
-### 3. Configure and build
+The `vcpkg.json` manifest in the repository root pins all dependency versions
+automatically. No manual `vcpkg install` step is needed — CMake will install
+them during configure.
 
 Open a terminal in the repository root and run:
 
@@ -169,8 +173,6 @@ The built executable will be at `build\Release\duckdb_flight_server.exe`.
 ### Server (Windows)
 
 ```powershell
-vcpkg install "arrow[flight,parquet]:x64-windows" duckdb:x64-windows
-
 cmake -B build -G "Visual Studio 15 2017" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 cmake --build build --config Release -j
