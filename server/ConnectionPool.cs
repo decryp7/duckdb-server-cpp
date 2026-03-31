@@ -86,11 +86,17 @@ namespace DuckArrowServer
                 // Wake any threads waiting in Borrow() so they see disposed=true.
                 Monitor.PulseAll(lockObj);
 
-                // Wait until all borrowed connections have been returned.
+                // Wait up to 30 seconds total for all borrowed connections to return.
+                // If a Handle is leaked (caller bug), we give up and dispose what we have.
+                var deadline = DateTime.UtcNow.AddSeconds(30);
                 while (idle.Count < poolSize)
-                    Monitor.Wait(lockObj, 5000); // 5s timeout to avoid hanging forever
+                {
+                    int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (remaining <= 0) break; // give up waiting for leaked handles
+                    Monitor.Wait(lockObj, remaining);
+                }
 
-                // Now all connections are idle. Dispose them.
+                // Dispose all connections we have (idle + any that were returned).
                 while (idle.Count > 0)
                     SafeDispose(idle.Dequeue());
             }

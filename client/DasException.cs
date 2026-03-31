@@ -44,7 +44,7 @@ namespace DuckArrowClient
         /// Called by the .NET runtime when deserializing an exception that has
         /// been serialized across an AppDomain boundary.
         /// </summary>
-        protected DasException(SerializationInfo info, StreamingContext context)
+        private DasException(SerializationInfo info, StreamingContext context)
             : base(info, context) { }
     }
 }

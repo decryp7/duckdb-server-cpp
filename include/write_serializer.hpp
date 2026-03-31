@@ -375,10 +375,12 @@ private:
             } else if (i + 1 < sql.size() && sql[i] == '/' && sql[i+1] == '*') {
                 // Block comment: skip to closing */.
                 i += 2;
+                bool closed = false;
                 while (i + 1 < sql.size()) {
-                    if (sql[i] == '*' && sql[i+1] == '/') { i += 2; break; }
+                    if (sql[i] == '*' && sql[i+1] == '/') { i += 2; closed = true; break; }
                     ++i;
                 }
+                if (!closed) i = sql.size(); // unterminated — skip to end
             } else {
                 break; // Not whitespace or comment — stop.
             }

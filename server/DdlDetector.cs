@@ -96,15 +96,19 @@ namespace DuckArrowServer
                 if (pos + 1 < sql.Length && sql[pos] == '/' && sql[pos + 1] == '*')
                 {
                     pos += 2;
+                    bool closed = false;
                     while (pos + 1 < sql.Length)
                     {
                         if (sql[pos] == '*' && sql[pos + 1] == '/')
                         {
                             pos += 2;
+                            closed = true;
                             break;
                         }
                         pos++;
                     }
+                    // Unterminated block comment — skip to end of string.
+                    if (!closed) pos = sql.Length;
                     continue;
                 }
 
