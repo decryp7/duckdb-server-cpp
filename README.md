@@ -58,33 +58,51 @@ with a **.NET 4.6.2** client library.
 ```
 .
 ├── README.md
+├── DESIGN.md                       Detailed design document
 ├── CHANGELOG.md
 ├── PROTOCOL.md                     Flight RPC surface description
 ├── BUILD_WINDOWS.md                Build guide (VS 2017)
 ├── CMakeLists.txt
 ├── vcpkg.json                      Pinned dependency versions for VS2017
 │
-├── include/
+├── include/                        C++ server headers
+│   ├── interfaces.hpp              Abstract interfaces
 │   ├── flight_server.hpp           DuckFlightServer + ServerConfig
 │   ├── connection_pool.hpp         Thread-safe DuckDB connection pool
 │   ├── write_serializer.hpp        Single-writer transaction batcher
-│   └── duck_bridge.hpp             DuckDB → Arrow IPC helpers
+│   └── duck_bridge.hpp             DuckDB → Arrow bridge
 │
-├── src/
-│   ├── main.cpp                    CLI, TLS setup, Flight server startup
-│   ├── flight_server.cpp           DoGet / DoAction / DuckDBRecordBatchReader
+├── src/                            C++ server implementation
+│   ├── main.cpp                    CLI, TLS setup, server startup
+│   ├── flight_server.cpp           DoGet / DoAction / ListActions
 │   ├── duck_bridge.cpp             Arrow C Data Interface bridge
 │   └── connection_pool.cpp         (stub; impl in header)
 │
-└── client/
-    ├── DuckArrowClient.csproj      net462; Apache.Arrow.Flight + Grpc.Core
-    ├── DasFlightClient.cs          Thread-safe Flight client (one per app)
+├── server/                         C# server (VS2017, .NET 4.6.2)
+│   ├── DuckArrowServer.sln         VS2017 solution
+│   ├── DuckArrowServer.csproj      Project file
+│   ├── Program.cs                  CLI, signal handling, gRPC startup
+│   ├── DuckFlightServer.cs         DoGet / DoAction / ListActions
+│   ├── IConnectionPool.cs          Connection pool interface
+│   ├── ConnectionPool.cs           Connection pool implementation
+│   ├── IWriteSerializer.cs         Write serializer interface
+│   ├── WriteSerializer.cs          Batched write transactions
+│   ├── DdlDetector.cs              DDL vs DML detection
+│   ├── ArrowTypeConverter.cs       CLR ↔ Arrow type mapping
+│   ├── RecordBatchBuilder.cs       DataReader → Arrow batches
+│   └── ServerConfig.cs             Config, stats, WriteResult
+│
+└── client/                         C# client library (VS2017, .NET 4.6.2)
+    ├── DuckArrowClient.sln         VS2017 solution
+    ├── DuckArrowClient.csproj      Project file
+    ├── DasFlightClient.cs          Thread-safe Flight client
     ├── DasFlightPool.cs            Optional pool for channel isolation
-    ├── FlightQueryResult.cs        Schema + batches; ToRows() / ToDataTable()
+    ├── FlightQueryResult.cs        Query result + type mapping
+    ├── ArrowValueConverter.cs      Arrow → CLR value boxing
     ├── DasException.cs             Typed exception
-    ├── ArrowStreamReader.cs        IPC bytes reader (kept for interop)
-    ├── DataTableExtensions.cs      ToDataTable() on ArrowStreamReader
-    └── Example.cs                  9 annotated usage examples
+    ├── ArrowStreamReader.cs        Legacy IPC reader
+    ├── DataTableExtensions.cs      DataTable helpers
+    └── Example.cs                  Usage examples
 ```
 
 ---

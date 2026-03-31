@@ -6,231 +6,235 @@ using DuckDB.NET.Data;
 namespace DuckArrowServer
 {
     /// <summary>
-    /// Result of a write (DML/DDL) operation.
-    /// </summary>
-    public struct WriteResult
-    {
-        public bool Ok;
-        public string Error;
-
-        public static WriteResult Success()
-        {
-            return new WriteResult { Ok = true, Error = null };
-        }
-
-        public static WriteResult Failure(string error)
-        {
-            return new WriteResult { Ok = false, Error = error };
-        }
-    }
-
-    /// <summary>
-    /// Serialises concurrent write operations into batched transactions.
-    /// Mirrors the C++ WriteSerializer class.
+    /// Batches concurrent write requests into single DuckDB transactions.
     ///
-    /// DuckDB supports exactly one writer at a time. Rather than reject concurrent
-    /// writes, this class queues them and executes each batch in a single
-    /// BEGIN...COMMIT transaction, maximising throughput while preserving correctness.
-    ///
-    /// DDL statements (CREATE, DROP, ALTER, ...) are executed outside any explicit
-    /// transaction and therefore cannot be batched with DML.
+    /// How it works:
+    ///   1. Callers submit SQL via Submit(). Each call blocks until done.
+    ///   2. A background thread collects requests over a short time window.
+    ///   3. DML statements in the window are wrapped in one BEGIN...COMMIT.
+    ///   4. DDL statements (CREATE, DROP, etc.) run individually.
+    ///   5. If any DML fails, the batch rolls back and each is retried alone.
     /// </summary>
-    public sealed class WriteSerializer : IDisposable
+    public sealed class WriteSerializer : IWriteSerializer
     {
-        private readonly DuckDBConnection _conn;
-        private readonly int _batchWindowMs;
-        private readonly int _batchMax;
-        private readonly Queue<Request> _queue = new Queue<Request>();
-        private readonly object _lock = new object();
-        private readonly Thread _writerThread;
-        private volatile bool _stop;
+        private readonly DuckDBConnection writerConnection;
+        private readonly int batchWindowMs;
+        private readonly int batchMax;
+        private readonly Queue<WriteRequest> queue = new Queue<WriteRequest>();
+        private readonly object lockObj = new object();
+        private readonly Thread writerThread;
+        private volatile bool stop;
 
-        /// <summary>
-        /// Construct and start the writer background thread.
-        /// </summary>
-        /// <param name="connectionString">DuckDB connection string for the dedicated write connection.</param>
-        /// <param name="batchWindowMs">Max milliseconds to wait before flushing a partial batch.</param>
-        /// <param name="batchMax">Maximum number of DML statements per transaction.</param>
         public WriteSerializer(string connectionString, int batchWindowMs = 5, int batchMax = 512)
         {
-            _batchWindowMs = batchWindowMs;
-            _batchMax = batchMax;
-            _conn = new DuckDBConnection(connectionString);
-            _conn.Open();
+            this.batchWindowMs = batchWindowMs;
+            this.batchMax = batchMax;
 
-            _writerThread = new Thread(DrainLoop)
+            writerConnection = new DuckDBConnection(connectionString);
+            writerConnection.Open();
+
+            writerThread = new Thread(DrainLoop)
             {
                 Name = "DAS-Writer",
                 IsBackground = true
             };
-            _writerThread.Start();
+            writerThread.Start();
         }
 
         /// <summary>
-        /// Submit a write statement and block until its transaction commits.
+        /// Submit a SQL statement and wait for it to complete.
         /// </summary>
-        /// <param name="sql">UTF-8 DML or DDL statement.</param>
-        /// <returns>WriteResult indicating success or the DuckDB error message.</returns>
         public WriteResult Submit(string sql)
         {
-            var req = new Request(sql);
+            var request = new WriteRequest(sql);
 
-            lock (_lock)
+            lock (lockObj)
             {
-                _queue.Enqueue(req);
-                Monitor.Pulse(_lock);
+                queue.Enqueue(request);
+                Monitor.Pulse(lockObj);
             }
 
-            // Block until the writer thread resolves this request.
-            req.Done.WaitOne();
-            return req.Result;
+            // Wait until the writer thread finishes this request.
+            request.DoneSignal.WaitOne();
+            return request.Result;
         }
 
-        /// <summary>
-        /// Stop the writer thread and wait for it to finish.
-        /// </summary>
         public void Dispose()
         {
-            _stop = true;
-            lock (_lock) { Monitor.PulseAll(_lock); }
-            _writerThread.Join(TimeSpan.FromSeconds(10));
-            _conn.Dispose();
+            stop = true;
+            lock (lockObj) { Monitor.PulseAll(lockObj); }
+            writerThread.Join(TimeSpan.FromSeconds(10));
+            writerConnection.Dispose();
         }
 
-        // ── Internal types ───────────────────────────────────────────────────
-
-        private sealed class Request
-        {
-            public readonly string Sql;
-            public readonly ManualResetEventSlim Done = new ManualResetEventSlim(false);
-            public WriteResult Result;
-
-            public Request(string sql) { Sql = sql; }
-        }
-
-        // ── Writer thread ────────────────────────────────────────────────────
+        // ── Background writer thread ─────────────────────────────────────────
 
         private void DrainLoop()
         {
             while (true)
             {
-                var batch = new List<Request>();
-                CollectBatch(batch);
-                if (batch.Count == 0) break; // _stop was set and queue is drained
+                var batch = CollectBatch();
+                if (batch.Count == 0) break; // stop signal, queue empty
                 ExecuteBatch(batch);
             }
         }
 
-        private void CollectBatch(List<Request> batch)
+        /// <summary>
+        /// Wait for requests to arrive, then collect a batch.
+        /// Returns an empty list when it's time to shut down.
+        /// </summary>
+        private List<WriteRequest> CollectBatch()
         {
-            lock (_lock)
+            var batch = new List<WriteRequest>();
+
+            lock (lockObj)
             {
-                // Block until work arrives or we are told to stop.
-                while (_queue.Count == 0 && !_stop)
-                    Monitor.Wait(_lock);
+                // Wait for work or stop signal.
+                while (queue.Count == 0 && !stop)
+                    Monitor.Wait(lockObj);
 
-                if (_stop && _queue.Count == 0) return;
+                if (stop && queue.Count == 0)
+                    return batch; // empty = shut down
 
-                // Drain immediately available requests.
-                DrainQueueLocked(batch);
+                // Take everything currently in the queue.
+                MoveQueueToBatch(batch);
 
-                // Wait briefly for more requests to arrive.
-                if (batch.Count < _batchMax)
+                // Wait a short time for more requests to arrive.
+                if (batch.Count < batchMax)
                 {
-                    Monitor.Wait(_lock, _batchWindowMs);
-                    DrainQueueLocked(batch);
+                    Monitor.Wait(lockObj, batchWindowMs);
+                    MoveQueueToBatch(batch);
                 }
             }
+
+            return batch;
         }
 
-        private void DrainQueueLocked(List<Request> batch)
+        private void MoveQueueToBatch(List<WriteRequest> batch)
         {
-            while (_queue.Count > 0 && batch.Count < _batchMax)
-            {
-                batch.Add(_queue.Dequeue());
-            }
+            while (queue.Count > 0 && batch.Count < batchMax)
+                batch.Add(queue.Dequeue());
         }
 
         // ── Batch execution ──────────────────────────────────────────────────
 
-        private void ExecuteBatch(List<Request> batch)
+        /// <summary>
+        /// Execute a batch of requests. DDL runs individually.
+        /// Consecutive DML runs are grouped into transactions.
+        /// </summary>
+        private void ExecuteBatch(List<WriteRequest> batch)
         {
             int i = 0;
             while (i < batch.Count)
             {
-                if (IsDdl(batch[i].Sql))
+                if (DdlDetector.IsDdl(batch[i].Sql))
                 {
-                    ExecuteSingle(batch[i]);
+                    // DDL cannot be inside a transaction. Run it alone.
+                    RunSingleStatement(batch[i]);
                     i++;
                 }
                 else
                 {
-                    // Find the end of this contiguous DML run.
-                    int j = i + 1;
-                    while (j < batch.Count && !IsDdl(batch[j].Sql)) j++;
-                    ExecuteDmlRun(batch, i, j);
-                    i = j;
+                    // Find how many consecutive DML statements we have.
+                    int end = FindEndOfDmlRun(batch, i);
+                    RunDmlTransaction(batch, i, end);
+                    i = end;
                 }
             }
         }
 
-        private void ExecuteDmlRun(List<Request> batch, int from, int to)
+        /// <summary>
+        /// Find the index where the DML run ends (first DDL or end of list).
+        /// </summary>
+        private static int FindEndOfDmlRun(List<WriteRequest> batch, int start)
         {
-            if (!ExecControl("BEGIN"))
+            int end = start + 1;
+            while (end < batch.Count && !DdlDetector.IsDdl(batch[end].Sql))
+                end++;
+            return end;
+        }
+
+        /// <summary>
+        /// Run a group of DML statements in one BEGIN...COMMIT transaction.
+        /// If anything fails, roll back and retry each statement individually.
+        /// </summary>
+        private void RunDmlTransaction(List<WriteRequest> batch, int from, int to)
+        {
+            // Step 1: Try to begin a transaction.
+            if (!TryExecuteControl("BEGIN"))
             {
-                for (int k = from; k < to; k++) ExecuteSingle(batch[k]);
+                RunEachIndividually(batch, from, to);
                 return;
             }
 
-            // Execute each statement inside the open transaction.
-            // Collect results BEFORE setting any promise — promises must be
-            // set only after COMMIT succeeds.
-            var results = new List<WriteResult>(to - from);
-            bool anyFailed = false;
+            // Step 2: Run each DML statement. Collect results but don't
+            // signal callers yet -- we need COMMIT to succeed first.
+            var results = new List<WriteResult>();
+            bool allSucceeded = true;
 
-            for (int k = from; k < to; k++)
+            for (int i = from; i < to; i++)
             {
-                var wr = ExecOne(batch[k].Sql);
-                if (!wr.Ok)
+                var result = TryExecute(batch[i].Sql);
+                if (!result.Ok)
                 {
-                    anyFailed = true;
+                    allSucceeded = false;
                     break;
                 }
-                results.Add(wr);
+                results.Add(result);
             }
 
-            if (anyFailed)
+            // Step 3: If any statement failed, roll back and retry each alone.
+            if (!allSucceeded)
             {
-                ExecControl("ROLLBACK");
-                for (int k = from; k < to; k++) ExecuteSingle(batch[k]);
+                TryExecuteControl("ROLLBACK");
+                RunEachIndividually(batch, from, to);
                 return;
             }
 
-            if (!ExecControl("COMMIT"))
+            // Step 4: Try to commit. If COMMIT fails, retry each alone.
+            if (!TryExecuteControl("COMMIT"))
             {
-                for (int k = from; k < to; k++) ExecuteSingle(batch[k]);
+                RunEachIndividually(batch, from, to);
                 return;
             }
 
-            // COMMIT succeeded — resolve all promises.
-            for (int k = from; k < to; k++)
+            // Step 5: COMMIT succeeded! Tell all callers their write is done.
+            for (int i = from; i < to; i++)
             {
-                batch[k].Result = results[k - from];
-                batch[k].Done.Set();
+                batch[i].Result = results[i - from];
+                batch[i].DoneSignal.Set();
             }
         }
 
-        private void ExecuteSingle(Request req)
+        /// <summary>
+        /// Run each request individually (outside a transaction).
+        /// Used as a fallback when the batch transaction fails.
+        /// </summary>
+        private void RunEachIndividually(List<WriteRequest> batch, int from, int to)
         {
-            req.Result = ExecOne(req.Sql);
-            req.Done.Set();
+            for (int i = from; i < to; i++)
+                RunSingleStatement(batch[i]);
         }
 
-        private WriteResult ExecOne(string sql)
+        /// <summary>
+        /// Run one SQL statement and signal the caller when done.
+        /// </summary>
+        private void RunSingleStatement(WriteRequest request)
+        {
+            request.Result = TryExecute(request.Sql);
+            request.DoneSignal.Set();
+        }
+
+        // ── SQL execution helpers ────────────────────────────────────────────
+
+        /// <summary>
+        /// Execute a SQL statement and return the result.
+        /// </summary>
+        private WriteResult TryExecute(string sql)
         {
             try
             {
-                using (var cmd = _conn.CreateCommand())
+                using (var cmd = writerConnection.CreateCommand())
                 {
                     cmd.CommandText = sql;
                     cmd.ExecuteNonQuery();
@@ -243,62 +247,24 @@ namespace DuckArrowServer
             }
         }
 
-        private bool ExecControl(string sql)
+        /// <summary>
+        /// Execute a control statement (BEGIN, COMMIT, ROLLBACK).
+        /// Returns true if it worked.
+        /// </summary>
+        private bool TryExecuteControl(string sql)
         {
-            try
-            {
-                using (var cmd = _conn.CreateCommand())
-                {
-                    cmd.CommandText = sql;
-                    cmd.ExecuteNonQuery();
-                }
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return TryExecute(sql).Ok;
         }
 
-        // ── DDL detection ────────────────────────────────────────────────────
+        // ── Request type ─────────────────────────────────────────────────────
 
-        private static readonly string[] DdlKeywords = {
-            "CREATE", "DROP", "ALTER", "TRUNCATE",
-            "ATTACH", "DETACH", "VACUUM", "PRAGMA",
-            "COPY", "EXPORT", "IMPORT", "LOAD"
-        };
-
-        private static bool IsDdl(string sql)
+        private sealed class WriteRequest
         {
-            int i = 0;
-            // Skip leading whitespace.
-            while (i < sql.Length && char.IsWhiteSpace(sql[i])) i++;
+            public readonly string Sql;
+            public readonly ManualResetEventSlim DoneSignal = new ManualResetEventSlim(false);
+            public WriteResult Result;
 
-            // Skip single-line comments (-- ...).
-            if (i + 1 < sql.Length && sql[i] == '-' && sql[i + 1] == '-')
-            {
-                while (i < sql.Length && sql[i] != '\n') i++;
-                i++;
-                while (i < sql.Length && char.IsWhiteSpace(sql[i])) i++;
-            }
-
-            // Extract the first keyword (up to 8 characters, upper-cased).
-            int start = i;
-            int klen = 0;
-            while (klen < 8 && i < sql.Length && char.IsLetter(sql[i]))
-            {
-                klen++;
-                i++;
-            }
-
-            if (klen == 0) return false;
-            string keyword = sql.Substring(start, klen).ToUpperInvariant();
-
-            for (int k = 0; k < DdlKeywords.Length; k++)
-            {
-                if (keyword == DdlKeywords[k]) return true;
-            }
-            return false;
+            public WriteRequest(string sql) { Sql = sql; }
         }
     }
 }
