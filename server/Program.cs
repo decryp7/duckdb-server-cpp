@@ -12,7 +12,7 @@ namespace DuckArrowServer
     internal static class Program
     {
         private const string Version = "4.1.9";
-        private static Server grpcServer;
+        private static volatile Server grpcServer;
 
         static int Main(string[] args)
         {
@@ -47,11 +47,13 @@ namespace DuckArrowServer
 
         private static int RunServer(ServerConfig config)
         {
-            string connStr = config.ToConnectionString();
+            // Create the database manager first. All connections share this DB.
+            // Without this, each DuckDBConnection(":memory:") creates a separate DB.
+            var dbManager = new DatabaseManager(config.DbPath);
 
-            // Create the components.
-            var readPool = new ConnectionPool(connStr, config.ReaderPoolSize);
-            var writer = new WriteSerializer(connStr, config.WriteBatchMs, config.WriteBatchMax);
+            // Create the components using the shared database.
+            var readPool = new ConnectionPool(dbManager, config.ReaderPoolSize);
+            var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
             var flightServer = new DuckFlightServer(config, readPool, writer);
 
             // Create the gRPC server.
@@ -68,6 +70,7 @@ namespace DuckArrowServer
             // Block until shutdown (Ctrl+C calls ShutdownAsync).
             grpcServer.ShutdownTask.Wait();
             flightServer.Dispose();
+            dbManager.Dispose();
             return 0;
         }
 

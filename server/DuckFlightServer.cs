@@ -88,6 +88,7 @@ namespace DuckArrowServer
                         while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, BatchSize)) != null)
                         {
                             await responseStream.WriteAsync(batch).ConfigureAwait(false);
+                            batch.Dispose(); // Release Arrow memory buffers after sending.
                         }
                     }
                 }
@@ -146,7 +147,6 @@ namespace DuckArrowServer
             }
 
             string sql = Encoding.UTF8.GetString(request.Body.ToArray());
-            Interlocked.Increment(ref queriesWrite);
 
             // Submit to the write serializer and wait for commit.
             var result = writer.Submit(sql);
@@ -155,6 +155,9 @@ namespace DuckArrowServer
                 Interlocked.Increment(ref errors);
                 throw new RpcException(new Status(StatusCode.Internal, result.Error));
             }
+
+            // Only count after success.
+            Interlocked.Increment(ref queriesWrite);
         }
 
         /// <summary>
@@ -204,8 +207,11 @@ namespace DuckArrowServer
 
         // ── Dispose ──────────────────────────────────────────────────────────
 
+        private int disposed;
+
         public void Dispose()
         {
+            if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
             writer.Dispose();
             readPool.Dispose();
         }

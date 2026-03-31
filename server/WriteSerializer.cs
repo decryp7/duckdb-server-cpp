@@ -27,13 +27,12 @@ namespace DuckArrowServer
         private readonly Thread writerThread;
         private volatile bool stop;
 
-        public WriteSerializer(string connectionString, int batchWindowMs = 5, int batchMax = 512)
+        public WriteSerializer(DatabaseManager dbManager, int batchWindowMs = 5, int batchMax = 512)
         {
             this.batchWindowMs = batchWindowMs;
             this.batchMax = batchMax;
 
-            writerConnection = new DuckDBConnection(connectionString);
-            writerConnection.Open();
+            writerConnection = dbManager.CreateConnection();
 
             writerThread = new Thread(DrainLoop)
             {
@@ -57,6 +56,7 @@ namespace DuckArrowServer
             }
 
             request.DoneSignal.WaitOne();
+            request.DoneSignal.Dispose();
             return request.Result;
         }
 

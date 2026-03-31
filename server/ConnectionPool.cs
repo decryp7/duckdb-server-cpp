@@ -28,10 +28,10 @@ namespace DuckArrowServer
         /// <summary>
         /// Create a pool of DuckDB read connections.
         /// </summary>
-        /// <param name="connectionString">DuckDB connection string.</param>
+        /// <param name="dbManager">Database manager that creates connections sharing the same DB.</param>
         /// <param name="poolSize">How many connections to create.</param>
         /// <param name="borrowTimeoutMs">How long to wait before giving up (milliseconds).</param>
-        public ConnectionPool(string connectionString, int poolSize, int borrowTimeoutMs = 10000)
+        public ConnectionPool(DatabaseManager dbManager, int poolSize, int borrowTimeoutMs = 10000)
         {
             if (poolSize < 1)
                 throw new ArgumentOutOfRangeException(nameof(poolSize), "Must be at least 1.");
@@ -40,7 +40,7 @@ namespace DuckArrowServer
             Size = poolSize;
             idle = new Queue<DuckDBConnection>(poolSize);
 
-            CreateConnections(connectionString, poolSize);
+            CreateConnections(dbManager, poolSize);
         }
 
         /// <summary>
@@ -82,14 +82,13 @@ namespace DuckArrowServer
 
         // ── Private helpers ──────────────────────────────────────────────────
 
-        private void CreateConnections(string connectionString, int count)
+        private void CreateConnections(DatabaseManager dbManager, int count)
         {
             try
             {
                 for (int i = 0; i < count; i++)
                 {
-                    var conn = new DuckDBConnection(connectionString);
-                    conn.Open();
+                    var conn = dbManager.CreateConnection();
                     idle.Enqueue(conn);
                 }
             }
@@ -153,9 +152,9 @@ namespace DuckArrowServer
 
             public void Dispose()
             {
-                var c = conn;
+                // Interlocked.Exchange ensures only one thread returns the connection.
+                var c = Interlocked.Exchange(ref conn, null);
                 if (c == null) return;
-                conn = null;
                 pool.ReturnConnection(c);
             }
         }
