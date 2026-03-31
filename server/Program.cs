@@ -63,7 +63,7 @@ namespace DuckArrowServer
                 var credentials = BuildCredentials(config);
                 grpcServer = new Server
                 {
-                    Services = { Apache.Arrow.Flight.Internal.FlightService.BindService(flightServer) },
+                    Services = { Apache.Arrow.Flight.Protocol.FlightService.BindService(flightServer) },
                     Ports = { new ServerPort(config.Host, config.Port, credentials) }
                 };
                 grpcServer.Start();
