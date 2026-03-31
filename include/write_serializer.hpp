@@ -362,17 +362,26 @@ private:
      *       False positives (DDL identified as DML) would cause a DuckDB error.
      */
     static bool is_ddl(const std::string& sql) {
-        // Skip leading whitespace.
+        // Skip leading whitespace, single-line comments (--), and block comments (/* */).
+        // Loop handles multiple consecutive comments.
         size_t i = 0;
-        while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i])))
-            ++i;
-
-        // Skip single-line comments (-- …).
-        if (i + 1 < sql.size() && sql[i] == '-' && sql[i+1] == '-') {
-            while (i < sql.size() && sql[i] != '\n') ++i;
-            ++i;
-            while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i])))
+        while (i < sql.size()) {
+            if (std::isspace(static_cast<unsigned char>(sql[i]))) {
                 ++i;
+            } else if (i + 1 < sql.size() && sql[i] == '-' && sql[i+1] == '-') {
+                // Single-line comment: skip to end of line.
+                while (i < sql.size() && sql[i] != '\n') ++i;
+                if (i < sql.size()) ++i;
+            } else if (i + 1 < sql.size() && sql[i] == '/' && sql[i+1] == '*') {
+                // Block comment: skip to closing */.
+                i += 2;
+                while (i + 1 < sql.size()) {
+                    if (sql[i] == '*' && sql[i+1] == '/') { i += 2; break; }
+                    ++i;
+                }
+            } else {
+                break; // Not whitespace or comment — stop.
+            }
         }
 
         // Extract the first keyword (up to 8 characters, upper-cased).

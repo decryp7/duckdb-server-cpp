@@ -95,6 +95,12 @@ namespace DuckArrowServer
 
                 Interlocked.Increment(ref queriesRead);
             }
+            catch (OperationCanceledException)
+            {
+                // gRPC cancellation — let it propagate so the framework
+                // returns StatusCode.Cancelled instead of Internal.
+                throw;
+            }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref errors);

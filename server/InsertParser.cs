@@ -116,18 +116,19 @@ namespace DuckArrowServer
                 pos = SkipSpaces(sql, pos);
             }
 
+            // Save position before VALUES keyword for prefix extraction.
+            int beforeValues = pos;
+
             // Match "VALUES" (case-insensitive).
             if (!MatchKeyword(sql, pos, "VALUES", out pos))
                 return result;
 
             pos = SkipSpaces(sql, pos);
 
-            // The prefix is everything before "VALUES".
-            // We reconstruct it as: everything up to the VALUES keyword.
-            string prefix = sql.Substring(0, pos - "VALUES".Length).TrimEnd();
+            // The prefix is everything before the VALUES keyword.
+            string prefix = sql.Substring(0, beforeValues).TrimEnd();
 
             // The rest should be the values tuple: (...)
-            // There might be trailing whitespace or semicolons.
             string valuesPart = sql.Substring(pos).TrimEnd();
             if (valuesPart.EndsWith(";"))
                 valuesPart = valuesPart.Substring(0, valuesPart.Length - 1).TrimEnd();
