@@ -61,9 +61,12 @@ namespace DuckArrowServer
                 flightServer = new DuckFlightServer(config, readPool, writer);
 
                 var credentials = BuildCredentials(config);
+                // Apache.Arrow.Flight.Protocol.FlightService is internal.
+                // Use reflection to call BindService on the proto-generated gRPC class.
+                var serviceDef = GetFlightServiceDefinition(flightServer);
                 grpcServer = new Server
                 {
-                    Services = { Apache.Arrow.Flight.Protocol.FlightService.BindService(flightServer) },
+                    Services = { serviceDef },
                     Ports = { new ServerPort(config.Host, config.Port, credentials) }
                 };
                 grpcServer.Start();
@@ -115,6 +118,49 @@ namespace DuckArrowServer
             e.Cancel = true;
             Console.WriteLine("\n[das] Shutting down...");
             ShutdownGrpcServer();
+        }
+
+        /// <summary>
+        /// Apache.Arrow.Flight.Protocol.FlightService is internal.
+        /// Use reflection to call its BindService(FlightServiceBase) method
+        /// to get the ServerServiceDefinition for Grpc.Core hosting.
+        /// </summary>
+        private static Grpc.Core.ServerServiceDefinition GetFlightServiceDefinition(
+            Apache.Arrow.Flight.Server.FlightServer flightServer)
+        {
+            var asm = typeof(Apache.Arrow.Flight.FlightClient).Assembly;
+            var flightServiceType = asm.GetType("Apache.Arrow.Flight.Protocol.FlightService");
+            if (flightServiceType == null)
+                throw new InvalidOperationException(
+                    "Cannot find Apache.Arrow.Flight.Protocol.FlightService in the assembly.");
+
+            var bindMethod = flightServiceType.GetMethod("BindService",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                null,
+                new[] { flightServer.GetType().BaseType ?? flightServer.GetType() },
+                null);
+
+            // Try with the concrete type if base type didn't work.
+            if (bindMethod == null)
+            {
+                foreach (var m in flightServiceType.GetMethods(
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Static))
+                {
+                    if (m.Name == "BindService")
+                    {
+                        bindMethod = m;
+                        break;
+                    }
+                }
+            }
+
+            if (bindMethod == null)
+                throw new InvalidOperationException(
+                    "Cannot find BindService method on FlightService.");
+
+            return (Grpc.Core.ServerServiceDefinition)bindMethod.Invoke(null, new object[] { flightServer });
         }
 
         private static void ShutdownGrpcServer()
