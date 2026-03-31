@@ -1,9 +1,6 @@
 # Build output
 build/
 
-# DuckDB (downloaded manually, see README)
-third_party/
-
 # IDE / editor
 .vs/
 .vscode/
