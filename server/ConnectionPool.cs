@@ -48,13 +48,21 @@ namespace DuckArrowServer
         /// </summary>
         public IConnectionHandle Borrow()
         {
+            lock (lockObj)
+            {
+                if (disposed)
+                    throw new ObjectDisposedException(nameof(ConnectionPool));
+            }
+
             var deadline = DateTime.UtcNow.AddMilliseconds(borrowTimeoutMs);
 
             lock (lockObj)
             {
-                // Wait until a connection is free.
                 while (idle.Count == 0)
                 {
+                    if (disposed)
+                        throw new ObjectDisposedException(nameof(ConnectionPool));
+
                     int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
                     if (remaining <= 0)
                         throw new TimeoutException(

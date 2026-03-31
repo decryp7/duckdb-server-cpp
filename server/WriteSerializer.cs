@@ -26,6 +26,7 @@ namespace DuckArrowServer
         private readonly object lockObj = new object();
         private readonly Thread writerThread;
         private volatile bool stop;
+        private volatile bool writerThreadDead;
 
         public WriteSerializer(DatabaseManager dbManager, int batchWindowMs = 5, int batchMax = 512)
         {
@@ -47,6 +48,12 @@ namespace DuckArrowServer
         /// </summary>
         public WriteResult Submit(string sql)
         {
+            if (stop)
+                return WriteResult.Failure("WriteSerializer has been disposed");
+
+            if (writerThreadDead)
+                return WriteResult.Failure("Writer thread has terminated unexpectedly");
+
             var request = new WriteRequest(sql);
 
             lock (lockObj)
@@ -55,8 +62,16 @@ namespace DuckArrowServer
                 Monitor.Pulse(lockObj);
             }
 
-            request.DoneSignal.WaitOne();
+            // Wait with a timeout so we don't hang forever if the writer thread dies.
+            bool signalled = request.DoneSignal.Wait(TimeSpan.FromSeconds(30));
             request.DoneSignal.Dispose();
+
+            if (!signalled)
+            {
+                if (writerThreadDead)
+                    return WriteResult.Failure("Writer thread terminated while processing request");
+                return WriteResult.Failure("Write timed out after 30 seconds");
+            }
             return request.Result;
         }
 
@@ -64,19 +79,55 @@ namespace DuckArrowServer
         {
             stop = true;
             lock (lockObj) { Monitor.PulseAll(lockObj); }
-            writerThread.Join(TimeSpan.FromSeconds(10));
+
+            // Wait for the writer thread, but don't dispose the connection
+            // until the thread has actually stopped.
+            if (writerThread.IsAlive)
+                writerThread.Join(TimeSpan.FromSeconds(30));
+
             writerConnection.Dispose();
+
+            // Signal any remaining callers stuck in Submit().
+            lock (lockObj)
+            {
+                while (queue.Count > 0)
+                {
+                    var orphan = queue.Dequeue();
+                    orphan.Result = WriteResult.Failure("WriteSerializer disposed");
+                    orphan.DoneSignal.Set();
+                }
+            }
         }
 
         // ── Background writer thread ─────────────────────────────────────────
 
         private void DrainLoop()
         {
-            while (true)
+            try
             {
-                var batch = CollectBatch();
-                if (batch.Count == 0) break;
-                ExecuteBatch(batch);
+                while (true)
+                {
+                    var batch = CollectBatch();
+                    if (batch.Count == 0) break;
+                    ExecuteBatch(batch);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log the error. Mark the thread as dead so Submit() can report it.
+                writerThreadDead = true;
+                Console.Error.WriteLine("[das] Writer thread crashed: " + ex.Message);
+
+                // Signal all pending requests so they don't hang forever.
+                lock (lockObj)
+                {
+                    while (queue.Count > 0)
+                    {
+                        var orphan = queue.Dequeue();
+                        orphan.Result = WriteResult.Failure("Writer thread crashed: " + ex.Message);
+                        orphan.DoneSignal.Set();
+                    }
+                }
             }
         }
 
@@ -112,11 +163,6 @@ namespace DuckArrowServer
 
         // ── Batch execution ──────────────────────────────────────────────────
 
-        /// <summary>
-        /// Execute a batch of requests. DDL runs individually.
-        /// Consecutive DML runs are grouped into transactions.
-        /// Within each DML run, compatible INSERTs are merged into multi-row statements.
-        /// </summary>
         private void ExecuteBatch(List<WriteRequest> batch)
         {
             int i = 0;
@@ -144,10 +190,6 @@ namespace DuckArrowServer
             return end;
         }
 
-        /// <summary>
-        /// Run a group of DML statements in one BEGIN...COMMIT transaction.
-        /// Before executing, merge compatible INSERTs into multi-row statements.
-        /// </summary>
         private void RunDmlTransaction(List<WriteRequest> batch, int from, int to)
         {
             // Step 1: Merge compatible INSERTs into multi-row statements.
@@ -164,7 +206,7 @@ namespace DuckArrowServer
                 return;
             }
 
-            // Step 3: Execute each group. Collect results per group.
+            // Step 3: Execute each merged group.
             var groupResults = new List<WriteResult>();
             bool allSucceeded = true;
 
@@ -179,7 +221,7 @@ namespace DuckArrowServer
                 groupResults.Add(result);
             }
 
-            // Step 4: If any failed, roll back and retry each individually.
+            // Step 4: If any failed, roll back and retry individually.
             if (!allSucceeded)
             {
                 TryExecuteControl("ROLLBACK");
@@ -194,7 +236,7 @@ namespace DuckArrowServer
                 return;
             }
 
-            // Step 6: Signal all callers. Map group results back to individual requests.
+            // Step 6: Signal all callers.
             for (int g = 0; g < groups.Count; g++)
             {
                 var group = groups[g];

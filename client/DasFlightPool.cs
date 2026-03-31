@@ -128,21 +128,38 @@ namespace DuckArrowClient
 
         private void Return(DasFlightClient client)
         {
-            if (Thread.VolatileRead(ref _disposed) != 0) {
-                // Pool is disposed — dispose the client directly instead.
+            // Always check disposed FIRST. If disposed, just dispose the client.
+            // Don't add it to _idle because Dispose() may have already finished
+            // iterating the bag, and the client would be orphaned (never disposed).
+            if (Thread.VolatileRead(ref _disposed) != 0)
+            {
                 client.Dispose();
                 return;
             }
+
+            // Try to add back and release the semaphore.
+            // If a race with Dispose() occurs, dispose the client directly.
             _idle.Add(client);
+
+            if (Thread.VolatileRead(ref _disposed) != 0)
+            {
+                // Dispose() started after we added to _idle. Retrieve and dispose
+                // the client ourselves since Dispose() may have already finished.
+                if (_idle.TryTake(out var retrieved))
+                    retrieved.Dispose();
+                return;
+            }
+
             try
             {
                 _sem.Release();
             }
             catch (ObjectDisposedException)
             {
-                // The pool was disposed between the _disposed check above and
-                // _sem.Release(). The client was already added back to _idle
-                // where Dispose() will find and clean it up. Nothing to do here.
+                // Semaphore disposed. Client is in _idle where it will be cleaned
+                // up if Dispose() hasn't finished yet. If it has, we retrieve it.
+                if (_idle.TryTake(out var retrieved))
+                    retrieved.Dispose();
             }
         }
 

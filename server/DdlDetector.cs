@@ -47,15 +47,8 @@ namespace DuckArrowServer
         {
             int pos = 0;
 
-            // Skip leading whitespace.
-            pos = SkipWhitespace(sql, pos);
-
-            // Skip single-line comment (-- ...) if present.
-            if (pos + 1 < sql.Length && sql[pos] == '-' && sql[pos + 1] == '-')
-            {
-                pos = SkipToEndOfLine(sql, pos);
-                pos = SkipWhitespace(sql, pos);
-            }
+            // Skip leading whitespace and comments (multiple lines, block comments).
+            pos = SkipWhitespaceAndComments(sql, pos);
 
             // Read up to 8 letters as the keyword.
             int start = pos;
@@ -77,11 +70,55 @@ namespace DuckArrowServer
             return pos;
         }
 
+        /// <summary>
+        /// Skip all leading whitespace, single-line comments (--), and block comments.
+        /// Handles multiple consecutive comments.
+        /// </summary>
+        private static int SkipWhitespaceAndComments(string sql, int pos)
+        {
+            while (pos < sql.Length)
+            {
+                // Skip whitespace.
+                if (char.IsWhiteSpace(sql[pos]))
+                {
+                    pos++;
+                    continue;
+                }
+
+                // Skip single-line comment: -- ...
+                if (pos + 1 < sql.Length && sql[pos] == '-' && sql[pos + 1] == '-')
+                {
+                    pos = SkipToEndOfLine(sql, pos);
+                    continue;
+                }
+
+                // Skip block comment: /* ... */
+                if (pos + 1 < sql.Length && sql[pos] == '/' && sql[pos + 1] == '*')
+                {
+                    pos += 2;
+                    while (pos + 1 < sql.Length)
+                    {
+                        if (sql[pos] == '*' && sql[pos + 1] == '/')
+                        {
+                            pos += 2;
+                            break;
+                        }
+                        pos++;
+                    }
+                    continue;
+                }
+
+                // Not whitespace or comment — stop.
+                break;
+            }
+            return pos;
+        }
+
         private static int SkipToEndOfLine(string sql, int pos)
         {
             while (pos < sql.Length && sql[pos] != '\n')
                 pos++;
-            if (pos < sql.Length) pos++; // skip the newline itself
+            if (pos < sql.Length) pos++;
             return pos;
         }
     }

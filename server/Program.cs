@@ -49,28 +49,37 @@ namespace DuckArrowServer
         {
             // Create the database manager first. All connections share this DB.
             // Without this, each DuckDBConnection(":memory:") creates a separate DB.
-            var dbManager = new DatabaseManager(config.DbPath);
+            DatabaseManager dbManager = null;
+            DuckFlightServer flightServer = null;
 
-            // Create the components using the shared database.
-            var readPool = new ConnectionPool(dbManager, config.ReaderPoolSize);
-            var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
-            var flightServer = new DuckFlightServer(config, readPool, writer);
-
-            // Create the gRPC server.
-            var credentials = BuildCredentials(config);
-            grpcServer = new Server
+            try
             {
-                Services = { FlightServer.BindService(flightServer) },
-                Ports = { new ServerPort(config.Host, config.Port, credentials) }
-            };
-            grpcServer.Start();
+                dbManager = new DatabaseManager(config.DbPath);
 
-            PrintStartupBanner(config);
+                var readPool = new ConnectionPool(dbManager, config.ReaderPoolSize);
+                var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
+                flightServer = new DuckFlightServer(config, readPool, writer);
 
-            // Block until shutdown (Ctrl+C calls ShutdownAsync).
-            grpcServer.ShutdownTask.Wait();
-            flightServer.Dispose();
-            dbManager.Dispose();
+                var credentials = BuildCredentials(config);
+                grpcServer = new Server
+                {
+                    Services = { FlightServer.BindService(flightServer) },
+                    Ports = { new ServerPort(config.Host, config.Port, credentials) }
+                };
+                grpcServer.Start();
+
+                PrintStartupBanner(config);
+
+                // Block until shutdown (Ctrl+C calls ShutdownAsync).
+                grpcServer.ShutdownTask.Wait();
+            }
+            finally
+            {
+                // Dispose in reverse order. Handles partial construction.
+                flightServer?.Dispose();
+                dbManager?.Dispose();
+            }
+
             return 0;
         }
 

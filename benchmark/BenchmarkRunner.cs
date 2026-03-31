@@ -162,8 +162,8 @@ namespace DuckArrowBenchmark
 
             using (var client = new DasFlightClient(host, port))
             {
-                client.Execute("CREATE TABLE IF NOT EXISTS bench_mixed (id INTEGER, data TEXT)");
-                client.Execute("DELETE FROM bench_mixed");
+                client.Execute("DROP TABLE IF EXISTS bench_mixed");
+                client.Execute("CREATE TABLE bench_mixed (id INTEGER, data TEXT)");
 
                 var tracker = new LatencyTracker();
                 var stopwatch = Stopwatch.StartNew();
@@ -334,31 +334,33 @@ namespace DuckArrowBenchmark
             {
                 if (!isReader)
                 {
-                    client.Execute("CREATE TABLE IF NOT EXISTS bench_sustained (id INTEGER, data TEXT)");
-                    client.Execute("DELETE FROM bench_sustained");
+                    client.Execute("DROP TABLE IF EXISTS bench_sustained");
+                    client.Execute("CREATE TABLE bench_sustained (id INTEGER, data TEXT)");
                 }
 
                 var tracker = new LatencyTracker();
-                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds));
-                var stopwatch = Stopwatch.StartNew();
-
-                var tasks = new Task[concurrency];
-                for (int i = 0; i < concurrency; i++)
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds)))
                 {
-                    int clientId = i;
-                    if (isReader)
-                        tasks[i] = Task.Run(() => SustainedReaderWorker(client, readSql, tracker, cts.Token));
-                    else
-                        tasks[i] = Task.Run(() => SustainedWriterWorker(client, clientId, tracker, cts.Token));
+                    var stopwatch = Stopwatch.StartNew();
+
+                    var tasks = new Task[concurrency];
+                    for (int i = 0; i < concurrency; i++)
+                    {
+                        int clientId = i;
+                        if (isReader)
+                            tasks[i] = Task.Run(() => SustainedReaderWorker(client, readSql, tracker, cts.Token));
+                        else
+                            tasks[i] = Task.Run(() => SustainedWriterWorker(client, clientId, tracker, cts.Token));
+                    }
+
+                    Task.WaitAll(tasks);
+                    stopwatch.Stop();
+
+                    string name = string.Format("Sustained {0} ({1}s)",
+                        isReader ? "Read" : "Write", durationSeconds);
+
+                    return tracker.BuildResult(name, concurrency, stopwatch.ElapsedMilliseconds);
                 }
-
-                Task.WaitAll(tasks);
-                stopwatch.Stop();
-
-                string name = string.Format("Sustained {0} ({1}s)",
-                    isReader ? "Read" : "Write", durationSeconds);
-
-                return tracker.BuildResult(name, concurrency, stopwatch.ElapsedMilliseconds);
             }
         }
 
