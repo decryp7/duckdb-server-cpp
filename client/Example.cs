@@ -195,6 +195,13 @@ namespace DuckArrowClient
         public static void RawArrowBatches()
         {
             using (IDasFlightClient client = new DasFlightClient())
+            {
+                // Create a test table for this example.
+                client.Execute("CREATE TABLE IF NOT EXISTS sales (amount DOUBLE, region TEXT)");
+                client.Execute("INSERT INTO sales SELECT random() * 100, 'region_' || (range % 5) FROM range(0, 10000)");
+            }
+
+            using (IDasFlightClient client = new DasFlightClient())
             using (IFlightQueryResult result = client.Query(
                 "SELECT amount, region FROM sales LIMIT 1000000"))
             {
@@ -234,26 +241,30 @@ namespace DuckArrowClient
 
         static void Main()
         {
-            Console.WriteLine("=== 1. Basic query ===");
-            BasicQuery();
+            RunExample("1. Basic query", BasicQuery);
+            RunExample("2. DataTable", DataTableBinding);
+            RunExample("3. Writes", WriteOperations);
+            RunExample("4. Stats", PrintStats);
+            RunExample("5. Raw batches", RawArrowBatches);
+            RunExample("6. Concurrent", () => Task.Run(ConcurrentQueriesAsync).Wait());
+            RunExample("7. Pool", () => Task.Run(PooledQuery).Wait());
+
             Console.WriteLine();
-            Console.WriteLine("=== 2. DataTable ===");
-            DataTableBinding();
+            Console.WriteLine("All examples completed.");
+        }
+
+        private static void RunExample(string name, Action action)
+        {
+            Console.WriteLine("=== " + name + " ===");
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  Skipped: " + ex.InnerException?.Message ?? ex.Message);
+            }
             Console.WriteLine();
-            Console.WriteLine("=== 3. Writes ===");
-            WriteOperations();
-            Console.WriteLine();
-            Console.WriteLine("=== 4. Stats ===");
-            PrintStats();
-            Console.WriteLine();
-            Console.WriteLine("=== 5. Raw batches ===");
-            RawArrowBatches();
-            Console.WriteLine();
-            Console.WriteLine("=== 6. Concurrent ===");
-            Task.Run(ConcurrentQueriesAsync).Wait();
-            Console.WriteLine();
-            Console.WriteLine("=== 7. Pool ===");
-            Task.Run(PooledQuery).Wait();
         }
     }
 
