@@ -60,7 +60,7 @@ with a **.NET 4.6.2** client library.
 ├── README.md
 ├── CHANGELOG.md
 ├── PROTOCOL.md                     Flight RPC surface description
-├── BUILD_WINDOWS.md                Build guide (VS 2017 / 2019 / 2022)
+├── BUILD_WINDOWS.md                Build guide (VS 2017)
 ├── DuckDB-Arrow-Server-Design.pptx Architecture slides
 ├── CMakeLists.txt
 │
@@ -93,9 +93,12 @@ with a **.NET 4.6.2** client library.
 
 ### Prerequisites
 
-1. **Visual Studio** (2017, 2019, or 2022) with the "Desktop development with C++" workload
-2. **CMake** ≥ 3.14 — https://cmake.org/download/
+1. **Visual Studio 2017** with the "Desktop development with C++" workload
+2. **CMake 3.27.9** (last version with VS2017 generator support) — https://github.com/Kitware/CMake/releases/tag/v3.27.9
 3. **vcpkg** — package manager for C++ dependencies
+
+> **Important:** CMake 3.28+ dropped the Visual Studio 2017 generator.
+> Use CMake **3.27.9 or earlier** when building with VS2017.
 
 ### 1. Install vcpkg
 
@@ -115,32 +118,13 @@ C:\vcpkg\vcpkg install "arrow[flight,parquet]:x64-windows" duckdb:x64-windows
 
 ### 3. Configure and build
 
-Open a terminal in the repository root and run the commands for your Visual Studio version.
+Open a terminal in the repository root and run:
 
-**Visual Studio 2017**
 ```powershell
 cmake -B build -G "Visual Studio 15 2017" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
   -DVCPKG_TARGET_TRIPLET=x64-windows `
   -DCMAKE_BUILD_TYPE=Release
-
-cmake --build build --config Release -j
-```
-
-**Visual Studio 2019**
-```powershell
-cmake -B build -G "Visual Studio 16 2019" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
-  -DVCPKG_TARGET_TRIPLET=x64-windows
-
-cmake --build build --config Release -j
-```
-
-**Visual Studio 2022**
-```powershell
-cmake -B build -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
-  -DVCPKG_TARGET_TRIPLET=x64-windows
 
 cmake --build build --config Release -j
 ```
@@ -187,7 +171,7 @@ The built executable will be at `build\Release\duckdb_flight_server.exe`.
 ```powershell
 vcpkg install "arrow[flight,parquet]:x64-windows" duckdb:x64-windows
 
-cmake -B build -G "Visual Studio 16 2019" -A x64 `
+cmake -B build -G "Visual Studio 15 2017" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 cmake --build build --config Release -j
 
