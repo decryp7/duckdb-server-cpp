@@ -216,19 +216,24 @@ namespace DuckArrowServer
 
         /// <summary>
         /// Tell clients what actions this server supports.
+        /// In Apache.Arrow.Flight 14, ListActions uses a stream writer.
         /// </summary>
-        public override Task<List<FlightActionType>> ListActions(ServerCallContext context)
+        public override async Task ListActions(
+            IAsyncStreamWriter<FlightActionType> responseStream,
+            ServerCallContext context)
         {
-            var actions = new List<FlightActionType>
-            {
+            await responseStream.WriteAsync(
                 new FlightActionType("execute",
-                    "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success."),
+                    "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success."))
+                .ConfigureAwait(false);
+            await responseStream.WriteAsync(
                 new FlightActionType("ping",
-                    "Liveness check. Returns 'pong'."),
+                    "Liveness check. Returns 'pong'."))
+                .ConfigureAwait(false);
+            await responseStream.WriteAsync(
                 new FlightActionType("stats",
-                    "Server metrics as JSON.")
-            };
-            return Task.FromResult(actions);
+                    "Server metrics as JSON."))
+                .ConfigureAwait(false);
         }
 
         // ── Dispose ──────────────────────────────────────────────────────────
