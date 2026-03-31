@@ -191,26 +191,26 @@ namespace DuckArrowClient
     /// </para>
     /// </summary>
     // ─────────────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Represents a borrowed client from a <see cref="IDasFlightPool"/>.
+    /// Disposing the lease returns the client to the pool for reuse.
+    /// </summary>
+    public interface IPoolLease : IDisposable
+    {
+        /// <summary>The borrowed client. Valid until this lease is disposed.</summary>
+        IDasFlightClient Client { get; }
+    }
+
     public interface IDasFlightPool : IDisposable
     {
-        /// <summary>
-        /// Represents a borrowed client.  Disposing the lease returns the client
-        /// to the pool for reuse.
-        /// </summary>
-        interface ILease : IDisposable
-        {
-            /// <summary>The borrowed client. Valid until this lease is disposed.</summary>
-            IDasFlightClient Client { get; }
-        }
-
         /// <summary>
         /// Borrow a client, blocking until one is available.
         /// </summary>
         /// <param name="ct">Cancellation token.</param>
         /// <returns>A lease that returns the client on disposal.</returns>
-        ILease Borrow(CancellationToken ct = default);
+        IPoolLease Borrow(CancellationToken ct = default);
 
         /// <summary>Async version of <see cref="Borrow"/>.</summary>
-        Task<ILease> BorrowAsync(CancellationToken ct = default);
+        Task<IPoolLease> BorrowAsync(CancellationToken ct = default);
     }
 }

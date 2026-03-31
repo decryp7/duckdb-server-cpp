@@ -93,14 +93,14 @@ namespace DuckArrowClient
         // ── IDasFlightPool ────────────────────────────────────────────────────
 
         /// <inheritdoc/>
-        public IDasFlightPool.ILease Borrow(CancellationToken ct = default)
+        public IPoolLease Borrow(CancellationToken ct = default)
         {
             _sem.Wait(ct);
             return TakeLease();
         }
 
         /// <inheritdoc/>
-        public async Task<IDasFlightPool.ILease> BorrowAsync(CancellationToken ct = default)
+        public async Task<IPoolLease> BorrowAsync(CancellationToken ct = default)
         {
             await _sem.WaitAsync(ct).ConfigureAwait(false);
             return TakeLease();
@@ -108,7 +108,7 @@ namespace DuckArrowClient
 
         // ── Internal helpers ──────────────────────────────────────────────────
 
-        private IDasFlightPool.ILease TakeLease()
+        private IPoolLease TakeLease()
         {
             if (_idle.TryTake(out var client))
                 return new Lease(this, client);
@@ -143,7 +143,7 @@ namespace DuckArrowClient
         /// <summary>
         /// RAII lease that returns the client to the pool when disposed.
         /// </summary>
-        private sealed class Lease : IDasFlightPool.ILease
+        private sealed class Lease : IPoolLease
         {
             private readonly DasFlightPool   _pool;
             private readonly DasFlightClient _client;

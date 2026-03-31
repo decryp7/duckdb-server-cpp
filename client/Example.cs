@@ -224,7 +224,7 @@ namespace DuckArrowClient
         public static async Task PooledQuery()
         {
             using (IDasFlightPool pool = new DasFlightPool("localhost", 17777, size: 4))
-            using (IDasFlightPool.ILease lease = await pool.BorrowAsync())
+            using (IPoolLease lease = await pool.BorrowAsync())
             using (IFlightQueryResult result =
                 await lease.Client.QueryAsync("SELECT current_date AS today"))
             {
