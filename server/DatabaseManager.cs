@@ -8,19 +8,20 @@ namespace DuckArrowServer
     ///
     /// Why this exists:
     ///   In DuckDB.NET, each "new DuckDBConnection(Data Source=:memory:)"
-    ///   creates a SEPARATE in-memory database. That means the writer
-    ///   and reader connections would not share tables or data.
+    ///   creates a SEPARATE in-memory database. Readers and writers would
+    ///   not share tables or data.
     ///
-    ///   This class opens the database ONCE and creates all additional
-    ///   connections via DuplicateConnection(), which calls duckdb_connect
-    ///   on the same underlying database handle. All connections share
-    ///   the same tables and data.
+    ///   For in-memory mode, we use "Data Source=:memory:?cache=shared"
+    ///   which makes all connections with that string share the SAME
+    ///   underlying DuckDB database handle via DuckDB.NET's ConnectionCache.
     ///
-    ///   For file-based databases this also works correctly.
+    ///   For file-based databases, all connections naturally share the same
+    ///   file, so no special handling is needed.
     /// </summary>
     public sealed class DatabaseManager : IDisposable
     {
         private readonly DuckDBConnection primaryConnection;
+        private readonly string connectionString;
         private bool disposed;
 
         /// <summary>
@@ -28,14 +29,17 @@ namespace DuckArrowServer
         /// </summary>
         public DatabaseManager(string dbPath)
         {
-            string connectionString = BuildConnectionString(dbPath);
+            connectionString = BuildConnectionString(dbPath);
+
+            // Open the primary connection to create the database.
+            // For :memory:?cache=shared, this registers the shared instance.
             primaryConnection = new DuckDBConnection(connectionString);
             primaryConnection.Open();
         }
 
         /// <summary>
         /// Create a new connection to the SAME database.
-        /// Uses DuplicateConnection() which shares the underlying DuckDB handle.
+        /// For :memory: mode, uses cache=shared so all connections share state.
         /// The caller owns the returned connection and must dispose it.
         /// </summary>
         public DuckDBConnection CreateConnection()
@@ -43,11 +47,17 @@ namespace DuckArrowServer
             if (disposed)
                 throw new ObjectDisposedException(nameof(DatabaseManager));
 
-            // DuplicateConnection() calls duckdb_connect on the same duckdb_database
-            // handle, so all connections share the same in-memory (or file) database.
-            var conn = primaryConnection.DuplicateConnection();
+            var conn = new DuckDBConnection(connectionString);
             conn.Open();
             return conn;
+        }
+
+        /// <summary>
+        /// The connection string used for all connections.
+        /// </summary>
+        public string ConnectionString
+        {
+            get { return connectionString; }
         }
 
         public void Dispose()
@@ -59,8 +69,11 @@ namespace DuckArrowServer
 
         private static string BuildConnectionString(string dbPath)
         {
+            // For in-memory databases, use cache=shared so all connections
+            // share the same underlying DuckDB database handle.
             if (string.IsNullOrEmpty(dbPath) || dbPath == ":memory:")
-                return "Data Source=:memory:";
+                return "Data Source=:memory:?cache=shared";
+
             return "Data Source=" + dbPath;
         }
     }
