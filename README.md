@@ -1,31 +1,41 @@
 # DuckDB Arrow Flight Server  v4.1.8
 
-A C++14 server (Visual Studio 2017+) that exposes a DuckDB database as an **Apache Arrow Flight** service,
+A C++11 server (Visual Studio 2017) that exposes a DuckDB database as an **Apache Arrow Flight** service,
 with a **.NET 4.6.2** client library.
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│  .NET 4.6.2 client  (Apache.Arrow.Flight + Grpc.Core 2.46)            │
-│                                                                        │
-│  DasFlightClient  ──── DoGet(ticket=SQL) ────────────────────────────►│
-│                   ◄─── Arrow record batch stream ────────────────────  │
-│                  ─── DoAction("execute", SQL) ───────────────────────► │
-│                  ◄─── empty stream (ok) / gRPC INTERNAL (error) ─────  │
-│                                                                        │
-│         gRPC / HTTP/2 — multiplexed, optionally TLS                   │
-│                                                                        │
-│  C++14 DuckDB Flight Server (Visual Studio 2017+)                      │
-│  ┌────────────────────────────────────────────────────────────────┐    │
-│  │  arrow::flight::FlightServerBase (gRPC thread pool)           │    │
-│  │  ┌──────────────────────┬────────────────────────────────┐    │    │
-│  │  │  DoGet               │  DoAction("execute")           │    │    │
-│  │  │  ConnectionPool      │  WriteSerializer (batch txns)  │    │    │
-│  │  │  DuckDBRecordBatch   │  single writer connection      │    │    │
-│  │  │  Reader (zero-copy)  │                                │    │    │
-│  │  └──────────────────────┴────────────────────────────────┘    │    │
-│  │  DuckDB (Arrow C Data Interface)                              │    │
-│  └────────────────────────────────────────────────────────────────┘    │
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│  .NET 4.6.2 Client (Apache.Arrow.Flight + Grpc.Core 2.46)          │
+│                                                                     │
+│  DasFlightClient                                                    │
+│    ├── DoGet(ticket = SQL)  ──────────► Arrow record batch stream   │
+│    ├── DoAction("execute", SQL) ──────► empty stream (ok)           │
+│    │                            ◄────── gRPC INTERNAL (error)       │
+│    ├── DoAction("ping")   ──────────► "pong"                        │
+│    └── DoAction("stats")  ──────────► JSON metrics                  │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  gRPC / HTTP/2 — multiplexed, optionally TLS                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  C++11 DuckDB Flight Server (Visual Studio 2017)                    │
+│                                                                     │
+│  ┌───────────────────────────┐  ┌────────────────────────────────┐  │
+│  │  DoGet (reads)            │  │  DoAction("execute") (writes)  │  │
+│  │                           │  │                                │  │
+│  │  ConnectionPool           │  │  WriteSerializer               │  │
+│  │  (N read connections)     │  │  (batch DML into transactions) │  │
+│  │                           │  │                                │  │
+│  │  DuckDbRecordBatchSource  │  │  Single writer connection      │  │
+│  │  (zero-copy streaming)    │  │                                │  │
+│  └─────────────┬─────────────┘  └──────────────┬─────────────────┘  │
+│                │                                │                    │
+│                └────────────┬───────────────────┘                    │
+│                             ▼                                        │
+│               DuckDB (Arrow C Data Interface)                        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
