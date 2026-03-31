@@ -91,20 +91,20 @@ namespace DuckArrowClient
 
                         // Parse the IPC message to get schema or record batch.
                         using (var ms = new System.IO.MemoryStream(ipcData))
-                        using (var reader = new ArrowStreamReader(ms))
+                        using (var ipcReader = new Apache.Arrow.Ipc.ArrowStreamReader(ms))
                         {
                             RecordBatch batch;
-                            while ((batch = reader.ReadNextRecordBatch()) != null)
+                            while ((batch = ipcReader.ReadNextRecordBatch()) != null)
                             {
                                 if (schema == null)
-                                    schema = reader.Schema;
+                                    schema = ipcReader.Schema;
                                 if (batch.Length > 0)
                                     batches.Add(batch);
                                 else
                                     batch.Dispose();
                             }
                             if (schema == null)
-                                schema = reader.Schema;
+                                schema = ipcReader.Schema;
                         }
                     }
                 }
