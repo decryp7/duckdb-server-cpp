@@ -234,20 +234,25 @@ namespace DuckArrowClient
 
         static void Main()
         {
-            Console.WriteLine("=== 1. Basic query ===");   BasicQuery();
-            Console.WriteLine("
-=== 2. DataTable ===");   DataTableBinding();
-            Console.WriteLine("
-=== 3. Writes ===");      WriteOperations();
-            Console.WriteLine("
-=== 4. Stats ===");       PrintStats();
-            Console.WriteLine("
-=== 5. Raw batches ==="); RawArrowBatches();
-            Console.WriteLine("
-=== 6. Concurrent ===");
+            Console.WriteLine("=== 1. Basic query ===");
+            BasicQuery();
+            Console.WriteLine();
+            Console.WriteLine("=== 2. DataTable ===");
+            DataTableBinding();
+            Console.WriteLine();
+            Console.WriteLine("=== 3. Writes ===");
+            WriteOperations();
+            Console.WriteLine();
+            Console.WriteLine("=== 4. Stats ===");
+            PrintStats();
+            Console.WriteLine();
+            Console.WriteLine("=== 5. Raw batches ===");
+            RawArrowBatches();
+            Console.WriteLine();
+            Console.WriteLine("=== 6. Concurrent ===");
             Task.Run(ConcurrentQueriesAsync).Wait();
-            Console.WriteLine("
-=== 7. Pool ===");
+            Console.WriteLine();
+            Console.WriteLine("=== 7. Pool ===");
             Task.Run(PooledQuery).Wait();
         }
     }
