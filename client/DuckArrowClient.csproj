@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net462</TargetFramework>
+    <AssemblyName>DuckArrowClient</AssemblyName>
+    <RootNamespace>DuckArrowClient</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Apache.Arrow — core Arrow types and IPC reader (transitively provides
+      System.Memory, System.Buffers, System.Threading.Tasks.Extensions, etc.)
+    -->
+    <PackageReference Include="Apache.Arrow"        Version="14.0.1" />
+
+    <!--
+      Apache.Arrow.Flight — Flight RPC types: FlightClient, FlightTicket,
+      FlightAction, FlightResult, RecordBatchStreamReader, etc.
+      Targets netstandard2.0; compatible with net462 via MS compatibility shim.
+    -->
+    <PackageReference Include="Apache.Arrow.Flight" Version="14.0.1" />
+
+    <!--
+      Grpc.Core 2.46.x — last gRPC release with .NET Framework 4.x support.
+      Provides the Channel class and native gRPC C-core transport binaries (x64).
+      "Deprecated" means no new features, but it is stable and actively patched.
+      Grpc.Net.Client (the pure-managed replacement) requires .NET 5+.
+    -->
+    <PackageReference Include="Grpc.Core"           Version="2.46.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- System.Data.dll: DataTable / DataRow — GAC assembly, needs explicit ref -->
+    <Reference Include="System.Data" />
+  </ItemGroup>
+
+</Project>
