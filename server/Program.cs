@@ -128,7 +128,7 @@ namespace DuckArrowServer
         private static Grpc.Core.ServerServiceDefinition GetFlightServiceDefinition(
             Apache.Arrow.Flight.Server.FlightServer flightServer)
         {
-            var asm = typeof(Apache.Arrow.Flight.FlightClient).Assembly;
+            var asm = typeof(Apache.Arrow.Flight.Server.FlightServer).Assembly;
             var flightServiceType = asm.GetType("Apache.Arrow.Flight.Protocol.FlightService");
             if (flightServiceType == null)
                 throw new InvalidOperationException(
