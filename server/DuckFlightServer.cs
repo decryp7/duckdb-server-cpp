@@ -71,7 +71,7 @@ namespace DuckArrowServer
             FlightServerRecordBatchStreamWriter responseStream,
             ServerCallContext context)
         {
-            string sql = Encoding.UTF8.GetString(ticket.Ticket.ToArray());
+            string sql = Encoding.UTF8.GetString(ticket.Ticket.ToByteArray());
 
             try
             {
@@ -172,7 +172,7 @@ namespace DuckArrowServer
                     "execute action requires a non-empty SQL body"));
             }
 
-            string sql = Encoding.UTF8.GetString(request.Body.ToArray());
+            string sql = Encoding.UTF8.GetString(request.Body.ToByteArray());
 
             // Submit to the write serializer and wait for commit.
             var result = writer.Submit(sql);
