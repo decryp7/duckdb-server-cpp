@@ -25,8 +25,46 @@ endif()
 #   apt install libarrow-flight-dev   (or libarrow-dev + cmake -DArrow_FIND_COMPONENTS=Flight)
 #
 # The [flight] feature pulls gRPC and protobuf automatically.
-find_package(Arrow       REQUIRED)
-find_package(ArrowFlight REQUIRED)
+#
+# Arrow CMake packaging varies across versions and vcpkg baselines:
+#   - Newer Arrow: separate ArrowFlight package (ArrowFlightConfig.cmake)
+#   - Older Arrow / some vcpkg baselines: Flight is bundled in the Arrow package
+# We try both approaches for maximum compatibility.
+find_package(Arrow REQUIRED)
+
+# Try finding ArrowFlight as a separate package first.
+find_package(ArrowFlight QUIET)
+if(NOT ArrowFlight_FOUND)
+  # Fallback: check if Arrow Flight targets were exported by the Arrow package.
+  if(TARGET arrow_flight_shared OR TARGET ArrowFlight::arrow_flight_shared)
+    message(STATUS "ArrowFlight: found via Arrow package (bundled)")
+    set(ArrowFlight_FOUND TRUE)
+  else()
+    # Last resort: try to find the library manually.
+    find_library(ARROW_FLIGHT_LIBRARY NAMES arrow_flight
+      PATHS ${Arrow_DIR}/../../lib
+            ${Arrow_DIR}/../../../lib
+            $ENV{VCPKG_ROOT}/installed/x64-windows/lib
+            /usr/local/lib /usr/lib)
+    find_path(ARROW_FLIGHT_INCLUDE_DIR arrow/flight/api.h
+      PATHS ${Arrow_DIR}/../../include
+            ${Arrow_DIR}/../../../include
+            $ENV{VCPKG_ROOT}/installed/x64-windows/include
+            /usr/local/include /usr/include)
+    if(ARROW_FLIGHT_LIBRARY AND ARROW_FLIGHT_INCLUDE_DIR)
+      message(STATUS "ArrowFlight: found manually at ${ARROW_FLIGHT_LIBRARY}")
+      set(ArrowFlight_FOUND TRUE)
+    else()
+      message(FATAL_ERROR
+        "ArrowFlight not found.\n"
+        "  Make sure Arrow was installed with the [flight] feature:\n"
+        "    vcpkg install \"arrow[flight]:x64-windows\"\n"
+        "  Or install libarrow-flight-dev on Linux.")
+    endif()
+  endif()
+else()
+  message(STATUS "ArrowFlight: found via find_package")
+endif()
 
 # ── DuckDB ────────────────────────────────────────────────────────────────────
 find_path(DUCKDB_INCLUDE_DIR duckdb.h
@@ -62,11 +100,27 @@ target_include_directories(duckdb_flight_server PRIVATE
   ${DUCKDB_INCLUDE_DIR}
 )
 
+# Link Arrow Flight — handle different target names across versions.
+if(TARGET ArrowFlight::arrow_flight_shared)
+  set(FLIGHT_TARGET ArrowFlight::arrow_flight_shared)
+elseif(TARGET arrow_flight_shared)
+  set(FLIGHT_TARGET arrow_flight_shared)
+elseif(ARROW_FLIGHT_LIBRARY)
+  set(FLIGHT_TARGET ${ARROW_FLIGHT_LIBRARY})
+else()
+  message(FATAL_ERROR "No Arrow Flight link target found")
+endif()
+
 target_link_libraries(duckdb_flight_server PRIVATE
   Arrow::arrow_shared
-  ArrowFlight::arrow_flight_shared
+  ${FLIGHT_TARGET}
   ${DUCKDB_LIBRARY}
 )
+
+# Add manual include dir if ArrowFlight was found manually.
+if(ARROW_FLIGHT_INCLUDE_DIR)
+  target_include_directories(duckdb_flight_server PRIVATE ${ARROW_FLIGHT_INCLUDE_DIR})
+endif()
 
 # ── Windows ───────────────────────────────────────────────────────────────────
 if(WIN32)
