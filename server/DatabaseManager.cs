@@ -25,21 +25,21 @@ namespace DuckArrowServer
         private bool disposed;
 
         /// <summary>
-        /// Open the database. All subsequent connections share this database.
+        /// Open the database and apply performance settings.
+        /// All subsequent connections share this database.
         /// </summary>
-        public DatabaseManager(string dbPath)
+        public DatabaseManager(string dbPath, ServerConfig config)
         {
             connectionString = BuildConnectionString(dbPath);
 
-            // Open the primary connection to create the database.
-            // For :memory:?cache=shared, this registers the shared instance.
             primaryConnection = new DuckDBConnection(connectionString);
             primaryConnection.Open();
+
+            ApplyPerformanceSettings(config);
         }
 
         /// <summary>
         /// Create a new connection to the SAME database.
-        /// For :memory: mode, uses cache=shared so all connections share state.
         /// The caller owns the returned connection and must dispose it.
         /// </summary>
         public DuckDBConnection CreateConnection()
@@ -52,14 +52,6 @@ namespace DuckArrowServer
             return conn;
         }
 
-        /// <summary>
-        /// The connection string used for all connections.
-        /// </summary>
-        public string ConnectionString
-        {
-            get { return connectionString; }
-        }
-
         public void Dispose()
         {
             if (disposed) return;
@@ -67,10 +59,50 @@ namespace DuckArrowServer
             primaryConnection.Dispose();
         }
 
+        // ── Private helpers ──────────────────────────────────────────────────
+
+        /// <summary>
+        /// Apply DuckDB PRAGMA settings for performance.
+        /// These are database-level settings shared across all connections.
+        /// </summary>
+        private void ApplyPerformanceSettings(ServerConfig config)
+        {
+            // Memory limit: controls how much RAM DuckDB uses for query processing.
+            if (!string.IsNullOrEmpty(config.MemoryLimit))
+                ExecutePragma("SET memory_limit='" + config.MemoryLimit + "'");
+
+            // Thread count: controls DuckDB's internal parallelism.
+            if (config.DuckDbThreads > 0)
+                ExecutePragma("SET threads=" + config.DuckDbThreads);
+
+            // Enable object cache for faster metadata lookups.
+            ExecutePragma("PRAGMA enable_object_cache");
+
+            // Disable insertion order preservation for faster bulk inserts.
+            // DuckDB normally preserves the order rows were inserted, which
+            // adds overhead. Analytics queries don't need insertion order.
+            ExecutePragma("SET preserve_insertion_order=false");
+        }
+
+        private void ExecutePragma(string sql)
+        {
+            try
+            {
+                using (var cmd = primaryConnection.CreateCommand())
+                {
+                    cmd.CommandText = sql;
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log but don't fail — PRAGMAs are optimization hints.
+                Console.Error.WriteLine("[das] Warning: " + sql + " failed: " + ex.Message);
+            }
+        }
+
         private static string BuildConnectionString(string dbPath)
         {
-            // For in-memory databases, use cache=shared so all connections
-            // share the same underlying DuckDB database handle.
             if (string.IsNullOrEmpty(dbPath) || dbPath == ":memory:")
                 return "Data Source=:memory:?cache=shared";
 

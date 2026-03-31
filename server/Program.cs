@@ -54,7 +54,7 @@ namespace DuckArrowServer
 
             try
             {
-                dbManager = new DatabaseManager(config.DbPath);
+                dbManager = new DatabaseManager(config.DbPath, config);
 
                 var readPool = new ConnectionPool(dbManager, config.ReaderPoolSize);
                 var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
@@ -128,10 +128,15 @@ namespace DuckArrowServer
         private static void PrintStartupBanner(ServerConfig config)
         {
             Console.WriteLine("[das] Arrow Flight server v" + Version + " (C#)");
-            Console.WriteLine("      address  = " + config.Host + ":" + config.Port);
-            Console.WriteLine("      readers  = " + config.ReaderPoolSize);
-            Console.WriteLine("      tls      = " + (string.IsNullOrEmpty(config.TlsCertPath) ? "off" : "on"));
-            Console.WriteLine("      db       = " + config.DbPath);
+            Console.WriteLine("      address    = " + config.Host + ":" + config.Port);
+            Console.WriteLine("      readers    = " + config.ReaderPoolSize);
+            Console.WriteLine("      batch-size = " + config.BatchSize + " rows");
+            Console.WriteLine("      tls        = " + (string.IsNullOrEmpty(config.TlsCertPath) ? "off" : "on"));
+            Console.WriteLine("      db         = " + config.DbPath);
+            if (!string.IsNullOrEmpty(config.MemoryLimit))
+                Console.WriteLine("      memory     = " + config.MemoryLimit);
+            if (config.DuckDbThreads > 0)
+                Console.WriteLine("      threads    = " + config.DuckDbThreads);
             Console.WriteLine();
             Console.WriteLine("Press Ctrl+C to stop.");
         }
@@ -176,8 +181,11 @@ namespace DuckArrowServer
                     case "--port":      config.Port = ParseInt(value, "--port"); break;
                     case "--readers":   config.ReaderPoolSize = ParsePositive(value, "--readers"); break;
                     case "--batch-ms":  config.WriteBatchMs = ParseInt(value, "--batch-ms"); break;
-                    case "--batch-max": config.WriteBatchMax = ParsePositive(value, "--batch-max"); break;
-                    case "--tls-cert":  config.TlsCertPath = value; break;
+                    case "--batch-max":    config.WriteBatchMax = ParsePositive(value, "--batch-max"); break;
+                    case "--batch-size":   config.BatchSize = ParsePositive(value, "--batch-size"); break;
+                    case "--memory-limit": config.MemoryLimit = value; break;
+                    case "--threads":      config.DuckDbThreads = ParsePositive(value, "--threads"); break;
+                    case "--tls-cert":     config.TlsCertPath = value; break;
                     case "--tls-key":   config.TlsKeyPath = value; break;
                     default:
                         Console.Error.WriteLine("Unknown option: " + arg);
@@ -233,6 +241,11 @@ namespace DuckArrowServer
             Console.WriteLine("Write batching:");
             Console.WriteLine("  --batch-ms  <ms>    Batch window             (default: 5)");
             Console.WriteLine("  --batch-max <n>     Max writes per batch     (default: 512)");
+            Console.WriteLine();
+            Console.WriteLine("Performance:");
+            Console.WriteLine("  --batch-size <n>    Rows per Arrow batch     (default: 8192)");
+            Console.WriteLine("  --memory-limit <s>  DuckDB memory limit      (e.g. 4GB)");
+            Console.WriteLine("  --threads <n>       DuckDB thread count      (default: nCPU)");
             Console.WriteLine();
             Console.WriteLine("Other:");
             Console.WriteLine("  --version           Print version and exit");

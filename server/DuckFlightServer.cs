@@ -31,14 +31,14 @@ namespace DuckArrowServer
         private long queriesWrite;
         private long errors;
 
-        /// <summary>How many rows to put in each Arrow batch when streaming.</summary>
-        private const int BatchSize = 1024;
+        private readonly int batchSize;
 
         public DuckFlightServer(ServerConfig config, IConnectionPool readPool, IWriteSerializer writer)
         {
             this.config = config;
             this.readPool = readPool;
             this.writer = writer;
+            this.batchSize = config.batchSize > 0 ? config.batchSize : 8192;
         }
 
         /// <summary>Get a snapshot of live server metrics.</summary>
@@ -99,7 +99,7 @@ namespace DuckArrowServer
 
                         // Stream data batches until there are no more rows.
                         RecordBatch batch;
-                        while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, BatchSize)) != null)
+                        while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
                         {
                             try
                             {

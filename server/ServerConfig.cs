@@ -29,21 +29,24 @@ namespace DuckArrowServer
         /// <summary>Maximum number of DML statements per write transaction.</summary>
         public int WriteBatchMax { get; set; } = 512;
 
+        /// <summary>
+        /// Number of rows per Arrow record batch when streaming results.
+        /// Larger = fewer gRPC messages = higher throughput for big results.
+        /// Smaller = lower latency for first rows.
+        /// </summary>
+        public int BatchSize { get; set; } = 8192;
+
+        /// <summary>DuckDB memory limit (e.g. "4GB", "512MB"). Empty = DuckDB default (80% of RAM).</summary>
+        public string MemoryLimit { get; set; } = "";
+
+        /// <summary>DuckDB thread count. 0 = DuckDB default (nCPU).</summary>
+        public int DuckDbThreads { get; set; } = 0;
+
         /// <summary>Path to TLS certificate PEM file. Empty for plaintext.</summary>
         public string TlsCertPath { get; set; } = "";
 
         /// <summary>Path to TLS private key PEM file. Empty for plaintext.</summary>
         public string TlsKeyPath { get; set; } = "";
-
-        /// <summary>
-        /// Build a DuckDB connection string from the database path.
-        /// </summary>
-        public string ToConnectionString()
-        {
-            if (string.IsNullOrEmpty(DbPath) || DbPath == ":memory:")
-                return "Data Source=:memory:";
-            return "Data Source=" + DbPath;
-        }
     }
 
     /// <summary>

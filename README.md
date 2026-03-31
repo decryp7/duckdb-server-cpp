@@ -270,15 +270,71 @@ workloads that want hard channel-count limits or multiple server addresses.
 
 ---
 
-## Tuning
+## Performance Tuning
 
-| Workload | --readers | --batch-ms | --batch-max |
-|---|---|---|---|
-| Read-heavy (BI/analytics) | `nCPU×2` | 5 | 512 |
-| Write-heavy (ETL) | `nCPU` | 50 | 5000 |
-| Mixed | `nCPU×2` | 10 | 1000 |
+### Server flags
 
-gRPC thread count is managed by Arrow Flight internally (default: 4 × CPU).
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--readers` | `nCPU×2` | Read connection pool size |
+| `--batch-ms` | `5` | Write batch window (ms) |
+| `--batch-max` | `512` | Max writes per batch |
+| `--batch-size` | `8192` | Rows per Arrow batch (C# server) |
+| `--memory-limit` | 80% RAM | DuckDB memory limit (e.g. `4GB`) |
+| `--threads` | nCPU | DuckDB internal thread count |
+
+### Workload presets
+
+| Workload | --readers | --batch-ms | --batch-max | --batch-size |
+|----------|-----------|------------|-------------|--------------|
+| Read-heavy (BI) | `nCPU×2` | 5 | 512 | 65536 |
+| Write-heavy (ETL) | `nCPU` | 50 | 5000 | 8192 |
+| Mixed | `nCPU×2` | 10 | 1000 | 8192 |
+| Low-latency | `nCPU` | 1 | 64 | 1024 |
+
+### Write performance
+
+The server automatically merges consecutive single-row INSERTs to the same
+table into multi-row INSERTs (e.g. 100 individual `INSERT INTO t VALUES (x)`
+become one `INSERT INTO t VALUES (x1), (x2), ..., (x100)`). This reduces
+DuckDB parse/plan overhead from N to 1.
+
+For maximum write throughput:
+- Increase `--batch-ms` and `--batch-max` to collect more writes per transaction
+- Build multi-row INSERTs client-side when possible
+- Use `SET preserve_insertion_order=false` (applied automatically by the C# server)
+
+### Read performance
+
+- Increase `--batch-size` for large result sets (fewer gRPC messages)
+- Decrease `--batch-size` for low-latency first-row delivery
+- Use raw Arrow batch access on the client instead of `ToRows()` / `ToDataTable()`
+- `SET enable_object_cache` is applied automatically (faster metadata lookups)
+
+### Client best practices
+
+```csharp
+// ONE client per app — HTTP/2 multiplexes all concurrent RPCs
+using (var client = new DasFlightClient("server", 17777))
+{
+    // Use async for concurrent queries
+    var tasks = queries.Select(sql => client.QueryAsync(sql));
+    var results = await Task.WhenAll(tasks);
+
+    // Use raw Arrow batches for analytics (no boxing overhead)
+    foreach (var batch in result.Batches)
+    {
+        var amounts = (DoubleArray)batch.Column(amountIdx);
+        for (int i = 0; i < amounts.Length; i++)
+            total += amounts.GetValue(i).GetValueOrDefault();
+    }
+}
+```
+
+### Infrastructure
+
+- TLS adds ~5-15% overhead — skip for localhost/VPN traffic
+- gRPC thread pool is managed by Arrow Flight (default: 4 × CPU)
 
 ---
 
