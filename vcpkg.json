@@ -3,7 +3,6 @@
   "version": "4.1.9",
   "builtin-baseline": "6ca56aeb457f033d344a7106cb3f9f1abf8f4e98",
   "dependencies": [
-    { "name": "arrow", "features": ["flight", "parquet"] },
-    "duckdb"
+    { "name": "arrow", "features": ["flight", "parquet"] }
   ]
 }

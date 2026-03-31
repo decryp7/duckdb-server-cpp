@@ -116,11 +116,27 @@ C:\vcpkg\bootstrap-vcpkg.bat
 > **Note:** You can clone vcpkg to any location. Replace `C:\vcpkg` in all
 > commands below with your chosen path.
 
-### 2. Configure and build
+### 2. Install DuckDB
 
-The `vcpkg.json` manifest in the repository root pins all dependency versions
-automatically. No manual `vcpkg install` step is needed — CMake will install
-them during configure.
+DuckDB was not available in vcpkg in September 2022, so it must be installed
+manually. Download the C/C++ library from
+https://github.com/duckdb/duckdb/releases and place the files under
+`third_party/duckdb/`:
+
+```
+third_party/
+└── duckdb/
+    ├── include/
+    │   └── duckdb.h
+    └── lib/
+        ├── duckdb.lib
+        └── duckdb.dll
+```
+
+### 3. Configure and build
+
+The `vcpkg.json` manifest in the repository root pins Arrow and its dependencies
+automatically. CMake will install them during configure.
 
 Open a terminal in the repository root and run:
 
@@ -128,6 +144,7 @@ Open a terminal in the repository root and run:
 cmake -B build -G "Visual Studio 15 2017" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
   -DVCPKG_TARGET_TRIPLET=x64-windows `
+  -DCMAKE_SYSTEM_VERSION=10.0 `
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build --config Release -j
@@ -135,6 +152,9 @@ cmake --build build --config Release -j
 
 > **Tip:** If vcpkg is installed somewhere other than `C:\vcpkg`, update the
 > `-DCMAKE_TOOLCHAIN_FILE=` path accordingly.
+>
+> **Tip:** `-DCMAKE_SYSTEM_VERSION=10.0` tells CMake to use the Windows 10 SDK
+> instead of the older 8.1 SDK which may not be installed.
 
 The built executable will be at `build\Release\duckdb_flight_server.exe`.
 
@@ -174,7 +194,8 @@ The built executable will be at `build\Release\duckdb_flight_server.exe`.
 
 ```powershell
 cmake -B build -G "Visual Studio 15 2017" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+  -DCMAKE_SYSTEM_VERSION=10.0
 cmake --build build --config Release -j
 
 .\build\Release\duckdb_flight_server.exe --db C:\data\analytics.duckdb
