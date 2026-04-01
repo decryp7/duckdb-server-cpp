@@ -12,6 +12,7 @@ namespace DuckArrowBenchmark
     public sealed class BenchmarkResult
     {
         public string ScenarioName { get; set; }
+        public string Description { get; set; }
         public int ConcurrentClients { get; set; }
         public int TotalOperations { get; set; }
         public int SuccessCount { get; set; }
@@ -27,21 +28,30 @@ namespace DuckArrowBenchmark
 
         public void Print()
         {
-            Console.WriteLine("──────────────────────────────────────────────────");
-            Console.WriteLine("  Scenario     : " + ScenarioName);
-            Console.WriteLine("  Concurrency  : " + ConcurrentClients);
-            Console.WriteLine("  Operations   : " + TotalOperations);
-            Console.WriteLine("  Successes    : " + SuccessCount);
-            Console.WriteLine("  Errors       : " + ErrorCount);
-            Console.WriteLine("  Elapsed      : " + ElapsedMs + " ms");
-            Console.WriteLine("  Throughput   : " + OpsPerSecond.ToString("F1") + " ops/sec");
-            Console.WriteLine("  Avg latency  : " + AvgLatencyMs.ToString("F2") + " ms");
-            Console.WriteLine("  Min latency  : " + MinLatencyMs.ToString("F2") + " ms");
-            Console.WriteLine("  Max latency  : " + MaxLatencyMs.ToString("F2") + " ms");
-            Console.WriteLine("  P50 latency  : " + P50LatencyMs.ToString("F2") + " ms");
-            Console.WriteLine("  P95 latency  : " + P95LatencyMs.ToString("F2") + " ms");
-            Console.WriteLine("  P99 latency  : " + P99LatencyMs.ToString("F2") + " ms");
-            Console.WriteLine("──────────────────────────────────────────────────");
+            Console.WriteLine("  ┌─────────────────────────────────────────────────────");
+            Console.WriteLine("  │ " + ScenarioName);
+            if (!string.IsNullOrEmpty(Description))
+                Console.WriteLine("  │ " + Description);
+            Console.WriteLine("  ├─────────────────────────────────────────────────────");
+            Console.WriteLine("  │ Concurrency  : " + ConcurrentClients + " parallel threads");
+            Console.WriteLine("  │ Operations   : " + TotalOperations + " total (" + SuccessCount + " ok, " + ErrorCount + " failed)");
+            Console.WriteLine("  │ Elapsed      : " + FormatDuration(ElapsedMs));
+            Console.WriteLine("  │ Throughput   : " + OpsPerSecond.ToString("F1") + " operations/second");
+            Console.WriteLine("  │ Latency avg  : " + AvgLatencyMs.ToString("F2") + " ms");
+            Console.WriteLine("  │ Latency min  : " + MinLatencyMs.ToString("F2") + " ms");
+            Console.WriteLine("  │ Latency max  : " + MaxLatencyMs.ToString("F2") + " ms");
+            Console.WriteLine("  │ Latency P50  : " + P50LatencyMs.ToString("F2") + " ms (half of requests faster than this)");
+            Console.WriteLine("  │ Latency P95  : " + P95LatencyMs.ToString("F2") + " ms (95% of requests faster than this)");
+            Console.WriteLine("  │ Latency P99  : " + P99LatencyMs.ToString("F2") + " ms (99% of requests faster than this)");
+            Console.WriteLine("  └─────────────────────────────────────────────────────");
+            Console.WriteLine();
+        }
+
+        private static string FormatDuration(long ms)
+        {
+            if (ms < 1000) return ms + " ms";
+            if (ms < 60000) return (ms / 1000.0).ToString("F1") + " seconds";
+            return (ms / 60000.0).ToString("F1") + " minutes";
         }
     }
 
@@ -66,11 +76,12 @@ namespace DuckArrowBenchmark
             Interlocked.Increment(ref errorCount);
         }
 
-        public BenchmarkResult BuildResult(string scenarioName, int concurrency, long elapsedMs)
+        public BenchmarkResult BuildResult(string scenarioName, string description, int concurrency, long elapsedMs)
         {
             var result = new BenchmarkResult
             {
                 ScenarioName = scenarioName,
+                Description = description,
                 ConcurrentClients = concurrency,
                 SuccessCount = successCount,
                 ErrorCount = errorCount,

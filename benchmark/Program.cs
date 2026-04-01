@@ -4,23 +4,6 @@ using DuckArrowClient;
 
 namespace DuckArrowBenchmark
 {
-    /// <summary>
-    /// DuckDB Arrow Flight Server Benchmark Tool
-    ///
-    /// Runs a suite of performance tests against a running server:
-    ///   1. Concurrent readers at various levels
-    ///   2. Concurrent writers at various levels
-    ///   3. Mixed read/write workloads
-    ///   4. Large result set streaming
-    ///   5. Find maximum reader concurrency
-    ///   6. Find maximum writer concurrency
-    ///   7. Sustained throughput over time
-    ///
-    /// Usage:
-    ///   DuckArrowBenchmark.exe [--host HOST] [--port PORT] [--quick] [--full]
-    ///
-    /// The server must be running before starting the benchmark.
-    /// </summary>
     internal static class Program
     {
         static int Main(string[] args)
@@ -30,7 +13,6 @@ namespace DuckArrowBenchmark
             bool quick = false;
             bool full = false;
 
-            // Parse arguments.
             for (int i = 0; i < args.Length; i++)
             {
                 switch (args[i])
@@ -53,16 +35,26 @@ namespace DuckArrowBenchmark
                 }
             }
 
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("  DuckDB Arrow Flight Server Benchmark");
-            Console.WriteLine("  Target: " + host + ":" + port);
-            Console.WriteLine("  Mode: " + (full ? "full" : quick ? "quick" : "standard"));
-            Console.WriteLine("==========================================================");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  DuckDB Arrow Flight Server — Performance Benchmark");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine();
+            Console.WriteLine("  Target server  : {0}:{1}", host, port);
+            Console.WriteLine("  Mode           : {0}", full ? "FULL (all tests + max concurrency + sustained)" : quick ? "QUICK (smoke test)" : "STANDARD");
+            Console.WriteLine("  Protocol       : Arrow Flight over gRPC / HTTP/2");
+            Console.WriteLine("  Client         : single shared DasFlightClient (HTTP/2 multiplexing)");
+            Console.WriteLine();
+            Console.WriteLine("  What is measured:");
+            Console.WriteLine("    - Throughput: operations per second (higher = better)");
+            Console.WriteLine("    - Latency:   time per operation in ms (lower = better)");
+            Console.WriteLine("    - P50/P95/P99: percentile latencies (tail latency)");
+            Console.WriteLine("    - Errors:    failed operations (should be 0)");
+            Console.WriteLine();
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
             var runner = new BenchmarkRunner(host, port);
 
-            // Verify server is reachable.
             if (!VerifyServer(runner, host, port))
                 return 1;
 
@@ -75,37 +67,56 @@ namespace DuckArrowBenchmark
             else
                 RunStandardBenchmark(runner, allResults);
 
-            // Print summary table.
             PrintSummary(allResults);
             return 0;
         }
 
-        // ── Quick: fast smoke test ───────────────────────────────────────────
+        // ── Quick ────────────────────────────────────────────────────────────
 
         private static void RunQuickBenchmark(BenchmarkRunner runner, List<BenchmarkResult> results)
         {
-            Console.WriteLine("=== Quick Benchmark ===");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  QUICK BENCHMARK — Smoke test (4 scenarios)");
+            Console.WriteLine("  Purpose: verify server works and get a rough performance baseline");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
+            Console.WriteLine("--- Test 1: Single reader ---");
+            Console.WriteLine("  1 thread sends 50 SELECT queries, each returning 100 rows.");
+            Console.WriteLine("  Measures: baseline single-query latency without contention.");
             results.Add(runner.RunConcurrentReaders(1, 50, 100));
             results.Last().Print();
 
+            Console.WriteLine("--- Test 2: 10 concurrent readers ---");
+            Console.WriteLine("  10 threads each send 25 SELECT queries (250 total), 100 rows each.");
+            Console.WriteLine("  Measures: read throughput under moderate parallelism.");
             results.Add(runner.RunConcurrentReaders(10, 25, 100));
             results.Last().Print();
 
+            Console.WriteLine("--- Test 3: Single writer ---");
+            Console.WriteLine("  1 thread sends 50 INSERT statements into bench_write.");
+            Console.WriteLine("  Measures: baseline single-writer latency.");
             results.Add(runner.RunConcurrentWriters(1, 50));
             results.Last().Print();
 
+            Console.WriteLine("--- Test 4: 10 concurrent writers ---");
+            Console.WriteLine("  10 threads each send 25 INSERT statements (250 total).");
+            Console.WriteLine("  Measures: write batching effectiveness under contention.");
             results.Add(runner.RunConcurrentWriters(10, 25));
             results.Last().Print();
         }
 
-        // ── Standard: typical performance profile ────────────────────────────
+        // ── Standard ─────────────────────────────────────────────────────────
 
         private static void RunStandardBenchmark(BenchmarkRunner runner, List<BenchmarkResult> results)
         {
-            // --- Readers at increasing concurrency ---
-            Console.WriteLine("=== Concurrent Readers ===");
+            // --- Readers ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  CONCURRENT READERS — Scaling test");
+            Console.WriteLine("  Each thread sends 20 SELECT queries returning 1000 rows (2 columns).");
+            Console.WriteLine("  Scaling: 1 → 5 → 10 → 25 → 50 → 100 → 150 → 200 → 250 → 300 threads");
+            Console.WriteLine("  Purpose: find the throughput curve and saturation point for reads.");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
             int[] readerLevels = { 1, 5, 10, 25, 50, 100, 150, 200, 250, 300 };
@@ -116,9 +127,15 @@ namespace DuckArrowBenchmark
                 results.Add(result);
             }
 
-            // --- Writers at increasing concurrency ---
-            Console.WriteLine();
-            Console.WriteLine("=== Concurrent Writers ===");
+            // --- Writers ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  CONCURRENT WRITERS — Scaling test");
+            Console.WriteLine("  Each thread sends 20 INSERT statements into bench_write.");
+            Console.WriteLine("  The server's WriteSerializer batches these into transactions and");
+            Console.WriteLine("  merges compatible INSERTs into multi-row statements automatically.");
+            Console.WriteLine("  Scaling: 1 → 5 → 10 → 25 → 50 → 100 → 150 → 200 → 250 → 300 threads");
+            Console.WriteLine("  Purpose: find the throughput curve for writes with batching.");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
             int[] writerLevels = { 1, 5, 10, 25, 50, 100, 150, 200, 250, 300 };
@@ -129,9 +146,13 @@ namespace DuckArrowBenchmark
                 results.Add(result);
             }
 
-            // --- Mixed workloads ---
-            Console.WriteLine();
-            Console.WriteLine("=== Mixed Read/Write Workloads ===");
+            // --- Mixed ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  MIXED READ/WRITE — Contention test");
+            Console.WriteLine("  Reader and writer threads run simultaneously on the same server.");
+            Console.WriteLine("  Readers: SELECT 100 rows | Writers: INSERT INTO bench_mixed");
+            Console.WriteLine("  Purpose: measure performance degradation when reads and writes compete.");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
             results.Add(runner.RunMixedWorkload(readers: 50, writers: 10, opsPerClient: 20));
@@ -146,9 +167,14 @@ namespace DuckArrowBenchmark
             results.Add(runner.RunMixedWorkload(readers: 50, writers: 250, opsPerClient: 10));
             results.Last().Print();
 
-            // --- Large result sets ---
-            Console.WriteLine();
-            Console.WriteLine("=== Large Result Sets ===");
+            // --- Large results ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  LARGE RESULT SETS — Streaming throughput test");
+            Console.WriteLine("  Single client streams increasingly large query results.");
+            Console.WriteLine("  Query: SELECT id, val1, val2, label FROM range(0, N)");
+            Console.WriteLine("  Columns: INT64 + DOUBLE + DOUBLE + VARCHAR (~36 bytes/row)");
+            Console.WriteLine("  Purpose: measure Arrow IPC serialization and gRPC streaming speed.");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
             results.Add(runner.RunLargeResultSet(rowCount: 100000, iterations: 5));
@@ -167,81 +193,74 @@ namespace DuckArrowBenchmark
             results.Last().Print();
         }
 
-        // ── Full: everything + max concurrency + sustained ───────────────────
+        // ── Full ─────────────────────────────────────────────────────────────
 
         private static void RunFullBenchmark(BenchmarkRunner runner, List<BenchmarkResult> results)
         {
-            // Run the standard suite first.
             RunStandardBenchmark(runner, results);
 
-            // --- Find max reader concurrency ---
+            // --- Max concurrency ---
             var readerResults = runner.FindMaxConcurrency(
-                isReader: true,
-                startConcurrency: 10,
-                maxConcurrency: 300,
-                step: 10,
-                opsPerClient: 10,
-                maxErrorRate: 0.05);
+                isReader: true, startConcurrency: 10, maxConcurrency: 300,
+                step: 10, opsPerClient: 10, maxErrorRate: 0.05);
             results.AddRange(readerResults);
 
-            // --- Find max writer concurrency ---
             var writerResults = runner.FindMaxConcurrency(
-                isReader: false,
-                startConcurrency: 10,
-                maxConcurrency: 300,
-                step: 10,
-                opsPerClient: 10,
-                maxErrorRate: 0.05);
+                isReader: false, startConcurrency: 10, maxConcurrency: 300,
+                step: 10, opsPerClient: 10, maxErrorRate: 0.05);
             results.AddRange(writerResults);
 
-            // --- Sustained throughput: 60 seconds each ---
+            // --- Sustained ---
             Console.WriteLine();
-            Console.WriteLine("=== Sustained Throughput (60 seconds each) ===");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  SUSTAINED THROUGHPUT — Stability test (60 seconds each)");
+            Console.WriteLine("  Threads run continuously for 60 seconds without stopping.");
+            Console.WriteLine("  Purpose: detect memory leaks, GC pressure, and throughput degradation.");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
-            var sustainedRead = runner.RunSustainedThroughput(
-                concurrency: 50, durationSeconds: 60, isReader: true);
-            sustainedRead.Print();
-            results.Add(sustainedRead);
+            var sr = runner.RunSustainedThroughput(concurrency: 50, durationSeconds: 60, isReader: true);
+            sr.Print();
+            results.Add(sr);
 
-            var sustainedWrite = runner.RunSustainedThroughput(
-                concurrency: 50, durationSeconds: 60, isReader: false);
-            sustainedWrite.Print();
-            results.Add(sustainedWrite);
+            var sw = runner.RunSustainedThroughput(concurrency: 50, durationSeconds: 60, isReader: false);
+            sw.Print();
+            results.Add(sw);
 
-            var sustainedMixed = runner.RunSustainedThroughput(
-                concurrency: 100, durationSeconds: 60, isReader: true);
-            sustainedMixed.Print();
-            results.Add(sustainedMixed);
+            var sm = runner.RunSustainedThroughput(concurrency: 100, durationSeconds: 60, isReader: true);
+            sm.Print();
+            results.Add(sm);
 
-            // --- Large result sets at high concurrency ---
             Console.WriteLine();
-            Console.WriteLine("=== Large Result Sets (24M rows) ===");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  LARGE RESULT SET — Maximum data transfer");
+            Console.WriteLine("  Stream 24 million rows through the Flight protocol.");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
             results.Add(runner.RunLargeResultSet(rowCount: 24000000, iterations: 1));
             results.Last().Print();
         }
 
-        // ── Summary table ────────────────────────────────────────────────────
+        // ── Summary ──────────────────────────────────────────────────────────
 
         private static void PrintSummary(List<BenchmarkResult> results)
         {
             Console.WriteLine();
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("  SUMMARY");
-            Console.WriteLine("==========================================================");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  SUMMARY TABLE");
+            Console.WriteLine("==========================================================================");
             Console.WriteLine();
             Console.WriteLine(string.Format(
-                "{0,-35} {1,6} {2,10} {3,10} {4,10} {5,6}",
-                "Scenario", "Conc", "Ops/s", "Avg(ms)", "P99(ms)", "Errs"));
-            Console.WriteLine(new string('-', 85));
+                "  {0,-40} {1,5} {2,10} {3,10} {4,10} {5,5}",
+                "Scenario", "Conc", "Ops/s", "Avg(ms)", "P99(ms)", "Err"));
+            Console.WriteLine("  " + new string('-', 88));
 
             foreach (var r in results)
             {
                 Console.WriteLine(string.Format(
-                    "{0,-35} {1,6} {2,10:F1} {3,10:F2} {4,10:F2} {5,6}",
-                    Truncate(r.ScenarioName, 35),
+                    "  {0,-40} {1,5} {2,10:F1} {3,10:F2} {4,10:F2} {5,5}",
+                    Truncate(r.ScenarioName, 40),
                     r.ConcurrentClients,
                     r.OpsPerSecond,
                     r.AvgLatencyMs,
@@ -251,7 +270,6 @@ namespace DuckArrowBenchmark
 
             Console.WriteLine();
 
-            // Find peak throughput for reads and writes.
             BenchmarkResult bestRead = null;
             BenchmarkResult bestWrite = null;
             foreach (var r in results)
@@ -268,18 +286,15 @@ namespace DuckArrowBenchmark
                 }
             }
 
+            Console.WriteLine("  KEY FINDINGS:");
             if (bestRead != null)
-            {
                 Console.WriteLine(string.Format(
-                    "  Peak read throughput:  {0:F1} ops/s at {1} concurrent clients",
+                    "    Peak read throughput  : {0:F1} ops/s at {1} concurrent threads",
                     bestRead.OpsPerSecond, bestRead.ConcurrentClients));
-            }
             if (bestWrite != null)
-            {
                 Console.WriteLine(string.Format(
-                    "  Peak write throughput: {0:F1} ops/s at {1} concurrent clients",
+                    "    Peak write throughput : {0:F1} ops/s at {1} concurrent threads",
                     bestWrite.OpsPerSecond, bestWrite.ConcurrentClients));
-            }
             Console.WriteLine();
         }
 
@@ -287,25 +302,28 @@ namespace DuckArrowBenchmark
 
         private static bool VerifyServer(BenchmarkRunner runner, string host, int port)
         {
-            Console.Write("Connecting to server... ");
+            Console.Write("  Connecting to {0}:{1}... ", host, port);
             try
             {
                 using (var client = new DasFlightClient(host, port))
                 {
                     client.Ping();
+                    string stats = client.GetStats();
+                    Console.WriteLine("OK");
+                    Console.WriteLine("  Server stats: " + stats);
                 }
-                Console.WriteLine("OK");
                 Console.WriteLine();
                 return true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine("FAILED");
-                Console.Error.WriteLine("Could not connect to " + host + ":" + port);
-                Console.Error.WriteLine("Error: " + ex.Message);
                 Console.Error.WriteLine();
-                Console.Error.WriteLine("Make sure the server is running:");
-                Console.Error.WriteLine("  DuckArrowServer.exe --port " + port);
+                Console.Error.WriteLine("  Could not connect to " + host + ":" + port);
+                Console.Error.WriteLine("  Error: " + ex.Message);
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("  Make sure the server is running:");
+                Console.Error.WriteLine("    DuckArrowServer.exe --port " + port);
                 return false;
             }
         }
@@ -318,21 +336,26 @@ namespace DuckArrowBenchmark
 
         private static void PrintUsage()
         {
-            Console.WriteLine("DuckDB Arrow Flight Server Benchmark");
+            Console.WriteLine("DuckDB Arrow Flight Server — Performance Benchmark");
             Console.WriteLine();
             Console.WriteLine("Usage: DuckArrowBenchmark.exe [options]");
             Console.WriteLine();
             Console.WriteLine("  --host <addr>   Server address (default: localhost)");
             Console.WriteLine("  --port <n>      Server port (default: 17777)");
-            Console.WriteLine("  --quick         Fast smoke test (4 scenarios)");
-            Console.WriteLine("  --full          Full suite including max concurrency search");
+            Console.WriteLine("  --quick         Fast smoke test (4 scenarios, ~30s)");
+            Console.WriteLine("  --full          Full suite + max concurrency + sustained (~15min)");
             Console.WriteLine("  --help          Show this message");
+            Console.WriteLine();
+            Console.WriteLine("Modes:");
+            Console.WriteLine("  (default)       Standard suite: scaling readers/writers 1-300,");
+            Console.WriteLine("                  mixed workloads, large results up to 24M rows");
+            Console.WriteLine("  --quick         4 quick tests to verify server works");
+            Console.WriteLine("  --full          Standard + find max concurrency + 60s sustained");
             Console.WriteLine();
             Console.WriteLine("The server must be running before starting the benchmark.");
         }
     }
 
-    // Extension method for List (C# 7.3 doesn't have LINQ .Last() without System.Linq).
     internal static class ListExtensions
     {
         public static T Last<T>(this List<T> list)

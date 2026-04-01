@@ -26,17 +26,21 @@ namespace DuckArrowBenchmark
 
         // ── Scenario 1: Concurrent Readers ───────────────────────────────────
 
-        /// <summary>
-        /// Test how many concurrent SELECT queries the server can handle.
-        /// Each reader runs a query that returns `rowCount` rows.
-        /// </summary>
         public BenchmarkResult RunConcurrentReaders(int concurrency, int opsPerClient, int rowCount = 1000)
         {
             string sql = string.Format("SELECT range AS id, random() AS value FROM range(0, {0})", rowCount);
 
+            string description = string.Format(
+                "{0} threads each run {1} SELECT queries returning {2} rows.\n" +
+                "  │ SQL: SELECT range AS id, random() AS value FROM range(0, {2})\n" +
+                "  │ Tests: gRPC multiplexing, connection pool contention, DuckDB read parallelism",
+                concurrency, opsPerClient, rowCount);
+
+            Console.WriteLine("  Starting: {0} concurrent readers, {1} ops each, {2} rows per query...",
+                concurrency, opsPerClient, rowCount);
+
             using (var client = new DasFlightClient(host, port))
             {
-                // Warmup: let the server JIT and stabilize.
                 RunWarmup(client, sql);
 
                 var tracker = new LatencyTracker();
@@ -44,16 +48,14 @@ namespace DuckArrowBenchmark
 
                 var tasks = new Task[concurrency];
                 for (int i = 0; i < concurrency; i++)
-                {
-                    int clientId = i;
                     tasks[i] = Task.Run(() => ReaderWorker(client, sql, opsPerClient, tracker));
-                }
 
                 Task.WaitAll(tasks);
                 stopwatch.Stop();
 
                 return tracker.BuildResult(
-                    string.Format("Concurrent Readers ({0} rows)", rowCount),
+                    string.Format("Concurrent Readers x{0} ({1} rows)", concurrency, rowCount),
+                    description,
                     concurrency,
                     stopwatch.ElapsedMilliseconds);
             }
@@ -69,7 +71,6 @@ namespace DuckArrowBenchmark
                 {
                     using (var result = client.Query(sql))
                     {
-                        // Force materialization by reading row count.
                         int rows = result.RowCount;
                     }
                     sw.Stop();
@@ -85,15 +86,20 @@ namespace DuckArrowBenchmark
 
         // ── Scenario 2: Concurrent Writers ───────────────────────────────────
 
-        /// <summary>
-        /// Test how many concurrent INSERT/UPDATE operations the server can handle.
-        /// </summary>
         public BenchmarkResult RunConcurrentWriters(int concurrency, int opsPerClient)
         {
+            string description = string.Format(
+                "{0} threads each run {1} INSERT statements into the same table.\n" +
+                "  │ SQL: INSERT INTO bench_write VALUES (id, value, label)\n" +
+                "  │ Tests: WriteSerializer batching, multi-row INSERT merging, single-writer throughput\n" +
+                "  │ Total inserts: {2}",
+                concurrency, opsPerClient, concurrency * opsPerClient);
+
+            Console.WriteLine("  Starting: {0} concurrent writers, {1} INSERTs each ({2} total)...",
+                concurrency, opsPerClient, concurrency * opsPerClient);
+
             using (var client = new DasFlightClient(host, port))
             {
-                // Create the test table.
-                // Drop and recreate to avoid leftover data from previous runs.
                 client.Execute("DROP TABLE IF EXISTS bench_write");
                 client.Execute("CREATE TABLE bench_write (id INTEGER, value DOUBLE, label TEXT)");
 
@@ -110,15 +116,15 @@ namespace DuckArrowBenchmark
                 Task.WaitAll(tasks);
                 stopwatch.Stop();
 
-                // Verify: count rows to confirm writes landed.
                 using (var result = client.Query("SELECT COUNT(*) AS cnt FROM bench_write"))
                 {
                     var rows = result.ToRows();
-                    Console.WriteLine("  Rows written: " + rows[0]["cnt"]);
+                    Console.WriteLine("  Verified: " + rows[0]["cnt"] + " rows written to bench_write");
                 }
 
                 return tracker.BuildResult(
-                    "Concurrent Writers",
+                    string.Format("Concurrent Writers x{0}", concurrency),
+                    description,
                     concurrency,
                     stopwatch.ElapsedMilliseconds);
             }
@@ -153,12 +159,20 @@ namespace DuckArrowBenchmark
 
         // ── Scenario 3: Mixed Read/Write ─────────────────────────────────────
 
-        /// <summary>
-        /// Test mixed workload: some threads read, some threads write.
-        /// </summary>
         public BenchmarkResult RunMixedWorkload(int readers, int writers, int opsPerClient, int rowCount = 100)
         {
             string readSql = string.Format("SELECT range AS id FROM range(0, {0})", rowCount);
+
+            string description = string.Format(
+                "{0} reader threads + {1} writer threads running simultaneously.\n" +
+                "  │ Readers: SELECT range AS id FROM range(0, {4}) ({2} ops each)\n" +
+                "  │ Writers: INSERT INTO bench_mixed VALUES (...) ({2} ops each)\n" +
+                "  │ Tests: read/write contention, connection pool under mixed load\n" +
+                "  │ Total operations: {3}",
+                readers, writers, opsPerClient, (readers + writers) * opsPerClient, rowCount);
+
+            Console.WriteLine("  Starting: {0} readers + {1} writers, {2} ops each...",
+                readers, writers, opsPerClient);
 
             using (var client = new DasFlightClient(host, port))
             {
@@ -171,13 +185,9 @@ namespace DuckArrowBenchmark
                 int totalClients = readers + writers;
                 var tasks = new Task[totalClients];
 
-                // Start reader threads.
                 for (int i = 0; i < readers; i++)
-                {
                     tasks[i] = Task.Run(() => ReaderWorker(client, readSql, opsPerClient, tracker));
-                }
 
-                // Start writer threads.
                 for (int i = 0; i < writers; i++)
                 {
                     int clientId = i;
@@ -188,7 +198,8 @@ namespace DuckArrowBenchmark
                 stopwatch.Stop();
 
                 return tracker.BuildResult(
-                    string.Format("Mixed ({0}R + {1}W)", readers, writers),
+                    string.Format("Mixed {0}R + {1}W", readers, writers),
+                    description,
                     totalClients,
                     stopwatch.ElapsedMilliseconds);
             }
@@ -220,15 +231,23 @@ namespace DuckArrowBenchmark
 
         // ── Scenario 4: Large Result Sets ────────────────────────────────────
 
-        /// <summary>
-        /// Test streaming large result sets. Measures how fast the server
-        /// can push data to the client.
-        /// </summary>
         public BenchmarkResult RunLargeResultSet(int rowCount, int iterations)
         {
             string sql = string.Format(
                 "SELECT range AS id, random() AS val1, random() AS val2, " +
                 "'row_' || range AS label FROM range(0, {0})", rowCount);
+
+            double estimatedMb = rowCount * 36.0 / 1024 / 1024; // ~36 bytes per row estimate
+
+            string description = string.Format(
+                "Stream {0:N0} rows x 4 columns (INT, DOUBLE, DOUBLE, VARCHAR) x {1} iterations.\n" +
+                "  │ Estimated data: ~{2:F0} MB per query\n" +
+                "  │ SQL: SELECT range, random(), random(), 'row_'||range FROM range(0, {0})\n" +
+                "  │ Tests: Arrow IPC serialization speed, gRPC streaming throughput, memory handling",
+                rowCount, iterations, estimatedMb);
+
+            Console.WriteLine("  Starting: streaming {0:N0} rows ({1:F0} MB est.) x {2} iterations...",
+                rowCount, estimatedMb, iterations);
 
             using (var client = new DasFlightClient(host, port))
             {
@@ -259,7 +278,8 @@ namespace DuckArrowBenchmark
                 stopwatch.Stop();
 
                 return tracker.BuildResult(
-                    string.Format("Large Result Set ({0:N0} rows)", rowCount),
+                    string.Format("Large Result ({0:N0} rows)", rowCount),
+                    description,
                     1,
                     stopwatch.ElapsedMilliseconds);
             }
@@ -267,10 +287,6 @@ namespace DuckArrowBenchmark
 
         // ── Scenario 5: Find Maximum Concurrency ─────────────────────────────
 
-        /// <summary>
-        /// Ramp up concurrency until the error rate exceeds a threshold.
-        /// Returns results at each concurrency level.
-        /// </summary>
         public List<BenchmarkResult> FindMaxConcurrency(
             bool isReader,
             int startConcurrency,
@@ -280,17 +296,23 @@ namespace DuckArrowBenchmark
             double maxErrorRate = 0.05)
         {
             var results = new List<BenchmarkResult>();
+            string kind = isReader ? "Reader" : "Writer";
 
             Console.WriteLine();
-            Console.WriteLine("=== Finding Max " + (isReader ? "Reader" : "Writer") + " Concurrency ===");
-            Console.WriteLine(string.Format("  Ramping from {0} to {1}, step {2}, max error rate {3:P0}",
-                startConcurrency, maxConcurrency, step, maxErrorRate));
+            Console.WriteLine("=== Finding Maximum {0} Concurrency ===", kind);
+            Console.WriteLine("  Strategy: Increase parallel threads from {0} to {1} (step {2})",
+                startConcurrency, maxConcurrency, step);
+            Console.WriteLine("  Each level: {0} ops per thread, stop when error rate > {1:P0}",
+                opsPerClient, maxErrorRate);
+            if (isReader)
+                Console.WriteLine("  Operation: SELECT 100 rows per query (DoGet RPC)");
+            else
+                Console.WriteLine("  Operation: INSERT INTO bench_write (DoAction RPC)");
             Console.WriteLine();
 
             for (int concurrency = startConcurrency; concurrency <= maxConcurrency; concurrency += step)
             {
-                Console.Write(string.Format("  Testing {0} concurrent {1}s... ",
-                    concurrency, isReader ? "reader" : "writer"));
+                Console.Write("  {0,3} threads: ", concurrency);
 
                 BenchmarkResult result;
                 if (isReader)
@@ -302,16 +324,14 @@ namespace DuckArrowBenchmark
                     ? (double)result.ErrorCount / result.TotalOperations
                     : 0;
 
-                Console.WriteLine(string.Format("{0:F1} ops/s, {1:F1} ms avg, {2} errors ({3:P1})",
-                    result.OpsPerSecond, result.AvgLatencyMs, result.ErrorCount, errorRate));
+                Console.WriteLine("{0,8:F1} ops/s | {1,7:F1} ms avg | {2,7:F1} ms P99 | {3} errors ({4:P1})",
+                    result.OpsPerSecond, result.AvgLatencyMs, result.P99LatencyMs, result.ErrorCount, errorRate);
 
                 results.Add(result);
 
                 if (errorRate > maxErrorRate)
                 {
-                    Console.WriteLine(string.Format(
-                        "  >> Error rate {0:P1} exceeds threshold {1:P0}. Stopping.",
-                        errorRate, maxErrorRate));
+                    Console.WriteLine("  >>> Error rate {0:P1} exceeds {1:P0} threshold. Maximum reached.", errorRate, maxErrorRate);
                     break;
                 }
             }
@@ -321,14 +341,23 @@ namespace DuckArrowBenchmark
 
         // ── Scenario 6: Sustained Throughput ─────────────────────────────────
 
-        /// <summary>
-        /// Run at a fixed concurrency for a set duration to measure
-        /// sustained throughput and stability.
-        /// </summary>
         public BenchmarkResult RunSustainedThroughput(
             int concurrency, int durationSeconds, bool isReader, int rowCount = 100)
         {
             string readSql = string.Format("SELECT range AS id FROM range(0, {0})", rowCount);
+            string kind = isReader ? "Read" : "Write";
+
+            string description = string.Format(
+                "{0} threads running continuously for {1} seconds.\n" +
+                "  │ Operation: {2}\n" +
+                "  │ Tests: long-running stability, memory leaks, throughput consistency",
+                concurrency, durationSeconds,
+                isReader
+                    ? string.Format("SELECT range AS id FROM range(0, {0}) — repeated until time expires", rowCount)
+                    : "INSERT INTO bench_sustained VALUES (...) — repeated until time expires");
+
+            Console.WriteLine("  Starting: {0} threads x {1}s sustained {2}...",
+                concurrency, durationSeconds, kind.ToLower());
 
             using (var client = new DasFlightClient(host, port))
             {
@@ -356,10 +385,11 @@ namespace DuckArrowBenchmark
                     Task.WaitAll(tasks);
                     stopwatch.Stop();
 
-                    string name = string.Format("Sustained {0} ({1}s)",
-                        isReader ? "Read" : "Write", durationSeconds);
-
-                    return tracker.BuildResult(name, concurrency, stopwatch.ElapsedMilliseconds);
+                    return tracker.BuildResult(
+                        string.Format("Sustained {0} ({1}s, x{2})", kind, durationSeconds, concurrency),
+                        description,
+                        concurrency,
+                        stopwatch.ElapsedMilliseconds);
                 }
             }
         }
@@ -367,7 +397,6 @@ namespace DuckArrowBenchmark
         private static void SustainedReaderWorker(
             IDasFlightClient client, string sql, LatencyTracker tracker, CancellationToken ct)
         {
-            int i = 0;
             while (!ct.IsCancellationRequested)
             {
                 var sw = Stopwatch.StartNew();
@@ -386,7 +415,6 @@ namespace DuckArrowBenchmark
                     sw.Stop();
                     tracker.RecordError();
                 }
-                i++;
             }
         }
 
