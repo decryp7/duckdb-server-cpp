@@ -117,9 +117,9 @@ namespace DuckArrowClient
             try
             {
                 var request = new ExecuteRequest { Sql = sql };
-                var response = await invoker.AsyncUnaryCall(
-                    DuckDbService.ExecuteMethod, null, new CallOptions(cancellationToken: ct), request)
-                    .ConfigureAwait(false);
+                var call = invoker.AsyncUnaryCall(
+                    DuckDbService.ExecuteMethod, null, new CallOptions(cancellationToken: ct), request);
+                var response = await call.ResponseAsync.ConfigureAwait(false);
 
                 if (!response.Success)
                     throw new DasException("Execute failed: " + response.Error);
@@ -138,9 +138,12 @@ namespace DuckArrowClient
 
             try
             {
-                var response = Task.Run(() => invoker.AsyncUnaryCall(
-                    DuckDbService.PingMethod, null, new CallOptions(), new PingRequest()))
-                    .GetAwaiter().GetResult();
+                var response = Task.Run(async () =>
+                {
+                    var call = invoker.AsyncUnaryCall(
+                        DuckDbService.PingMethod, null, new CallOptions(), new PingRequest());
+                    return await call.ResponseAsync.ConfigureAwait(false);
+                }).GetAwaiter().GetResult();
 
                 if (response.Message != "pong")
                     throw new DasException("Ping: unexpected response '" + response.Message + "'");
@@ -159,9 +162,12 @@ namespace DuckArrowClient
 
             try
             {
-                var response = Task.Run(() => invoker.AsyncUnaryCall(
-                    DuckDbService.StatsMethod, null, new CallOptions(), new StatsRequest()))
-                    .GetAwaiter().GetResult();
+                var response = Task.Run(async () =>
+                {
+                    var call = invoker.AsyncUnaryCall(
+                        DuckDbService.StatsMethod, null, new CallOptions(), new StatsRequest());
+                    return await call.ResponseAsync.ConfigureAwait(false);
+                }).GetAwaiter().GetResult();
 
                 return response.ToJson();
             }
