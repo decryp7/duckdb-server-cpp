@@ -255,7 +255,10 @@ using (var client = new DasFlightClient("server", 17777))
 |-----------|-------------|
 | C# server | Grpc.Core 2.46.6, Google.Protobuf 3.24.4, DuckDB.NET.Data.Full 1.1.1 |
 | C# client | Grpc.Core 2.46.6, Google.Protobuf 3.24.4 |
-| C++ server | gRPC (vcpkg), Protobuf (vcpkg), DuckDB (third_party/) |
+| C++ server | gRPC 1.35.0 (built from source via `build_grpc.bat`), DuckDB (third_party/) |
+
+All versions communicate via the same gRPC wire protocol (HTTP/2 + protobuf).
+Different gRPC versions are fully interoperable — only the `.proto` file must match.
 
 No Apache Arrow dependency.
 
