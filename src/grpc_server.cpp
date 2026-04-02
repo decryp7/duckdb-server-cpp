@@ -336,22 +336,20 @@ grpc::Status DuckGrpcServer::Query(
             }
 
             duckdb_destroy_data_chunk(&chunk);
-            writer->Write(response, grpc::WriteOptions().set_buffer_hint());
+            writer->Write(response);
         }
 
-        // Final flush
-        response.Clear();
-        response.set_row_count(0);
+        // Empty result: send schema-only
         if (first_chunk) {
+            response.Clear();
+            response.set_row_count(0);
             for (idx_t c = 0; c < col_count; ++c) {
                 auto* meta = response.add_columns();
                 meta->set_name(col_names[c]);
                 meta->set_type(col_types[c]);
             }
+            writer->Write(response);
         }
-        grpc::WriteOptions last_opts;
-        last_opts.set_last_message();
-        writer->WriteLast(response, last_opts);
 
         duckdb_destroy_result(&result);
         stat_queries_read_.fetch_add(1);
