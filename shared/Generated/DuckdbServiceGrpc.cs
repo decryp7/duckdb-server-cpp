@@ -3,13 +3,15 @@
 //     source: duckdb_service.proto
 // </auto-generated>
 // Original file comments:
-// DuckDB gRPC Server — Protocol Definition v5.1
+// DuckDB gRPC Server — Protocol Definition v5.2
 //
-// Pure protobuf, no Arrow dependency.
-// Uses typed values (int64, double, bool, string, bytes) to avoid
-// ToString/Parse overhead. ~3x faster than string-only encoding.
+// COLUMNAR encoding: values are packed into typed arrays per column,
+// not wrapped in per-cell messages. This eliminates ~99% of protobuf
+// object allocations compared to row-by-row encoding.
 //
-// Cross-language: generate stubs with protoc for any language.
+// 1000 rows × 10 columns:
+//   Row format:  10,000 TypedValue objects + 1,000 Row objects = 11,000 allocs
+//   Columnar:    10 Column objects with packed repeated fields = 10 allocs
 //
 #pragma warning disable 0414, 1591
 #region Designer generated code
