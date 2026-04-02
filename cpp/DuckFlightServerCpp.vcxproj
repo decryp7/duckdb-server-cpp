@@ -31,8 +31,6 @@
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <ImportGroup Label="ExtensionSettings">
-  </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
@@ -47,35 +45,37 @@
     <OutDir>$(SolutionDir)cpp\bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)cpp\obj\$(Configuration)\</IntDir>
   </PropertyGroup>
-  <!--
-    VCPKG integration: set VCPKG_ROOT environment variable or edit the path below.
-    Uses the Sept 2022 baseline (vcpkg.json) for Arrow 9.0 + Protobuf 3.21.x (no Abseil).
-
-    Required vcpkg packages:
-      vcpkg install "arrow[flight,parquet]:x64-windows"
-
-    DuckDB: place duckdb.h + duckdb.lib under third_party/duckdb/{include,lib}
-  -->
+  <!-- Generated proto output directory -->
+  <PropertyGroup>
+    <ProtoGenDir>$(SolutionDir)cpp\generated</ProtoGenDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0601;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\include;..\third_party\duckdb\include;$(VCPKG_ROOT)\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\include;..\third_party\duckdb\include;$(ProtoGenDir);$(VCPKG_ROOT)\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp14</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <DisableSpecificWarnings>4100;4127</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4100;4127;4244;4267</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>..\third_party\duckdb\lib;$(VCPKG_ROOT)\installed\x64-windows\lib;$(VCPKG_ROOT)\installed\x64-windows\debug\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>arrow.lib;arrow_flight.lib;duckdb.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>arrow.lib;grpc++.lib;grpc.lib;libprotobuf.lib;gpr.lib;address_sorting.lib;cares.lib;zlib.lib;ssl.lib;crypto.lib;re2.lib;absl_base.lib;absl_strings.lib;absl_status.lib;absl_statusor.lib;absl_str_format_internal.lib;absl_synchronization.lib;absl_time.lib;absl_time_zone.lib;absl_int128.lib;absl_raw_logging_internal.lib;absl_log_severity.lib;absl_spinlock_wait.lib;absl_throw_delegate.lib;upb.lib;duckdb.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <!-- Pre-build: generate C++ from proto -->
+    <PreBuildEvent>
+      <Command>if not exist "$(ProtoGenDir)" mkdir "$(ProtoGenDir)"
+"$(VCPKG_ROOT)\installed\x64-windows\tools\protobuf\protoc.exe" --cpp_out="$(ProtoGenDir)" --grpc_out="$(ProtoGenDir)" --plugin=protoc-gen-grpc="$(VCPKG_ROOT)\installed\x64-windows\tools\grpc\grpc_cpp_plugin.exe" --proto_path="$(SolutionDir)proto" duckdb_service.proto</Command>
+      <Message>Generating C++ from duckdb_service.proto</Message>
+    </PreBuildEvent>
+    <!-- Post-build: copy DuckDB DLL -->
     <PostBuildEvent>
       <Command>if exist "..\third_party\duckdb\lib\duckdb.dll" copy /Y "..\third_party\duckdb\lib\duckdb.dll" "$(OutDir)"</Command>
-      <Message>Copying duckdb.dll to output directory</Message>
+      <Message>Copying duckdb.dll</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -86,10 +86,10 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0601;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\include;..\third_party\duckdb\include;$(VCPKG_ROOT)\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\include;..\third_party\duckdb\include;$(ProtoGenDir);$(VCPKG_ROOT)\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp14</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <DisableSpecificWarnings>4100;4127</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4100;4127;4244;4267</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -97,29 +97,33 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>..\third_party\duckdb\lib;$(VCPKG_ROOT)\installed\x64-windows\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>arrow.lib;arrow_flight.lib;duckdb.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>arrow.lib;grpc++.lib;grpc.lib;libprotobuf.lib;gpr.lib;address_sorting.lib;cares.lib;zlib.lib;ssl.lib;crypto.lib;re2.lib;absl_base.lib;absl_strings.lib;absl_status.lib;absl_statusor.lib;absl_str_format_internal.lib;absl_synchronization.lib;absl_time.lib;absl_time_zone.lib;absl_int128.lib;absl_raw_logging_internal.lib;absl_log_severity.lib;absl_spinlock_wait.lib;absl_throw_delegate.lib;upb.lib;duckdb.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
+    <PreBuildEvent>
+      <Command>if not exist "$(ProtoGenDir)" mkdir "$(ProtoGenDir)"
+"$(VCPKG_ROOT)\installed\x64-windows\tools\protobuf\protoc.exe" --cpp_out="$(ProtoGenDir)" --grpc_out="$(ProtoGenDir)" --plugin=protoc-gen-grpc="$(VCPKG_ROOT)\installed\x64-windows\tools\grpc\grpc_cpp_plugin.exe" --proto_path="$(SolutionDir)proto" duckdb_service.proto</Command>
+      <Message>Generating C++ from duckdb_service.proto</Message>
+    </PreBuildEvent>
     <PostBuildEvent>
       <Command>if exist "..\third_party\duckdb\lib\duckdb.dll" copy /Y "..\third_party\duckdb\lib\duckdb.dll" "$(OutDir)"</Command>
-      <Message>Copying duckdb.dll to output directory</Message>
+      <Message>Copying duckdb.dll</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\main.cpp" />
-    <ClCompile Include="..\src\flight_server.cpp" />
-    <ClCompile Include="..\src\duck_bridge.cpp" />
+    <ClCompile Include="..\src\main_grpc.cpp" />
+    <ClCompile Include="..\src\grpc_server.cpp" />
     <ClCompile Include="..\src\connection_pool.cpp" />
+    <!-- Generated proto files (created by pre-build step) -->
+    <ClCompile Include="$(ProtoGenDir)\duckdb_service.pb.cc" />
+    <ClCompile Include="$(ProtoGenDir)\duckdb_service.grpc.pb.cc" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\include\grpc_server.hpp" />
     <ClInclude Include="..\include\connection_pool.hpp" />
-    <ClInclude Include="..\include\duck_bridge.hpp" />
-    <ClInclude Include="..\include\flight_server.hpp" />
     <ClInclude Include="..\include\insert_batcher.hpp" />
     <ClInclude Include="..\include\interfaces.hpp" />
     <ClInclude Include="..\include\write_serializer.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Label="ExtensionTargets">
-  </ImportGroup>
 </Project>
