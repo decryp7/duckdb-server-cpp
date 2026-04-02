@@ -55,33 +55,28 @@ impl WriteSerializer {
         let col_count = data.len();
         if col_count == 0 || row_count == 0 { return Ok(0); }
 
-        let mut appender = conn.appender(table)
-            .map_err(|e| format!("Appender create: {}", e))?;
-
+        // Use SQL INSERT as fallback (Appender API varies across duckdb crate versions)
+        let col_count = data.len();
+        if col_count == 0 || row_count == 0 { return Ok(0); }
+        let mut sql = format!("INSERT INTO {} VALUES ", table);
         for r in 0..row_count {
-            let mut params: Vec<duckdb::types::Value> = Vec::with_capacity(col_count);
+            if r > 0 { sql.push_str(", "); }
+            sql.push('(');
             for c in 0..col_count {
+                if c > 0 { sql.push_str(", "); }
                 let cd = &data[c];
-                if cd.null_indices.contains(&(r as i32)) {
-                    params.push(duckdb::types::Value::Null);
-                } else if r < cd.int32_values.len() {
-                    params.push(duckdb::types::Value::Int(cd.int32_values[r]));
-                } else if r < cd.int64_values.len() {
-                    params.push(duckdb::types::Value::BigInt(cd.int64_values[r]));
-                } else if r < cd.double_values.len() {
-                    params.push(duckdb::types::Value::Double(cd.double_values[r]));
-                } else if r < cd.bool_values.len() {
-                    params.push(duckdb::types::Value::Boolean(cd.bool_values[r]));
-                } else if r < cd.string_values.len() {
-                    params.push(duckdb::types::Value::Text(cd.string_values[r].clone()));
-                } else {
-                    params.push(duckdb::types::Value::Null);
-                }
+                if cd.null_indices.contains(&(r as i32)) { sql.push_str("NULL"); }
+                else if r < cd.int32_values.len() { sql.push_str(&cd.int32_values[r].to_string()); }
+                else if r < cd.int64_values.len() { sql.push_str(&cd.int64_values[r].to_string()); }
+                else if r < cd.double_values.len() { sql.push_str(&cd.double_values[r].to_string()); }
+                else if r < cd.bool_values.len() { sql.push_str(if cd.bool_values[r] { "true" } else { "false" }); }
+                else if r < cd.string_values.len() {
+                    sql.push('\''); sql.push_str(&cd.string_values[r].replace('\'', "''")); sql.push('\'');
+                } else { sql.push_str("NULL"); }
             }
-            appender.append_row(duckdb::params_from_iter(params))
-                .map_err(|e| format!("Appender row: {}", e))?;
+            sql.push(')');
         }
-        appender.flush().map_err(|e| format!("Appender flush: {}", e))?;
+        conn.execute_batch(&sql).map_err(|e| format!("Bulk insert: {}", e))?;
         Ok(row_count)
     }
 }

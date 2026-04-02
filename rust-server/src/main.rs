@@ -101,16 +101,20 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
-            // Get schema from arrow result
-            let schema = arrow_result.get_ref().schema();
-            let columns: Vec<ColumnMeta> = schema.fields().iter().map(|f| ColumnMeta {
-                name: f.name().clone(),
-                r#type: arrow_type_to_proto(f.data_type()) as i32,
-            }).collect();
+            // Collect batches — schema comes from first batch
+            let batches: Vec<_> = arrow_result.collect();
+            let columns: Vec<ColumnMeta> = if let Some(first) = batches.first() {
+                first.schema().fields().iter().map(|f| ColumnMeta {
+                    name: f.name().clone(),
+                    r#type: arrow_type_to_proto(f.data_type()) as i32,
+                }).collect()
+            } else {
+                Vec::new()
+            };
 
             let mut first_batch = true;
 
-            for batch in arrow_result {
+            for batch in &batches {
                 let mut resp = QueryResponse {
                     columns: if first_batch { columns.clone() } else { Vec::new() },
                     data: Vec::with_capacity(batch.num_columns()),
@@ -342,9 +346,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Optimization 3: HTTP/2 window sizes for high-throughput streaming
     Server::builder()
-        .http2_initial_stream_window_size(Some(2 * 1024 * 1024))     // 2MB
-        .http2_initial_connection_window_size(Some(4 * 1024 * 1024)) // 4MB
-        .http2_adaptive_window(Some(true))
+        .initial_stream_window_size(Some(2 * 1024 * 1024))     // 2MB
+        .initial_connection_window_size(Some(4 * 1024 * 1024)) // 4MB
         .tcp_nodelay(true)
         .tcp_keepalive(Some(Duration::from_secs(60)))
         .add_service(DuckDbServiceServer::new(server_impl))
