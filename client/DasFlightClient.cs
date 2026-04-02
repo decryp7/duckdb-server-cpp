@@ -68,7 +68,7 @@ namespace DuckArrowClient
 
                         // Each chunk is a complete Arrow IPC stream.
                         using (var ms = new MemoryStream(ipcData))
-                        using (var ipcReader = new ArrowStreamReader(ms))
+                        using (var ipcReader = new Apache.Arrow.Ipc.ArrowStreamReader(ms))
                         {
                             RecordBatch batch;
                             while ((batch = ipcReader.ReadNextRecordBatch()) != null)
