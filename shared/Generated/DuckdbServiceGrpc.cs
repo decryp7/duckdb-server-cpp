@@ -3,25 +3,13 @@
 //     source: duckdb_service.proto
 // </auto-generated>
 // Original file comments:
-// DuckDB Arrow Flight Server — Custom gRPC Protocol
+// DuckDB gRPC Server — Protocol Definition
 //
 // This proto defines the RPC surface for the DuckDB server.
-// It replaces Apache Arrow Flight for .NET Framework 4.6.2 compatibility.
+// All data is transferred as protobuf messages — no Arrow dependency.
 //
-// Why not Arrow Flight?
-//   Arrow Flight's .NET FlightClient/FlightServer require Grpc.Net.Client
-//   which needs .NET 5+. On .NET Framework 4.6.2 with Grpc.Core, the
-//   Flight protocol types are internal and inaccessible.
-//
-// Data format:
-//   Query results are streamed as Apache Arrow IPC bytes inside protobuf
-//   messages. The client uses Apache.Arrow.Ipc.ArrowStreamReader to parse
-//   them. This gives columnar performance without depending on the Arrow
-//   Flight wire format.
-//
-// Cross-language:
-//   Any language with gRPC + protobuf codegen can generate a client from
-//   this proto file (C++, Python, Java, Go, Rust, etc.).
+// Cross-language: generate client/server stubs for any language with
+//   protoc --<lang>_out --grpc_out proto/duckdb_service.proto
 //
 #pragma warning disable 0414, 1591
 #region Designer generated code
@@ -129,9 +117,9 @@ namespace DuckDbProto {
     public abstract partial class DuckDbServiceBase
     {
       /// <summary>
-      /// Execute a SELECT query and stream results as Arrow IPC batches.
-      /// The first response contains the Arrow IPC stream header (schema).
-      /// Subsequent responses contain record batch chunks.
+      /// Execute a SELECT query and stream results as rows.
+      /// First response contains the column schema.
+      /// Subsequent responses contain batches of rows.
       /// </summary>
       /// <param name="request">The request received from the client.</param>
       /// <param name="responseStream">Used for sending responses back to the client.</param>
@@ -144,8 +132,7 @@ namespace DuckDbProto {
       }
 
       /// <summary>
-      /// Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE, DROP, ...).
-      /// Blocks until the statement's transaction commits.
+      /// Execute a DML or DDL statement.
       /// </summary>
       /// <param name="request">The request received from the client.</param>
       /// <param name="context">The context of the server-side call handler being invoked.</param>
@@ -210,9 +197,9 @@ namespace DuckDbProto {
       }
 
       /// <summary>
-      /// Execute a SELECT query and stream results as Arrow IPC batches.
-      /// The first response contains the Arrow IPC stream header (schema).
-      /// Subsequent responses contain record batch chunks.
+      /// Execute a SELECT query and stream results as rows.
+      /// First response contains the column schema.
+      /// Subsequent responses contain batches of rows.
       /// </summary>
       /// <param name="request">The request to send to the server.</param>
       /// <param name="headers">The initial metadata to send with the call. This parameter is optional.</param>
@@ -225,9 +212,9 @@ namespace DuckDbProto {
         return Query(request, new grpc::CallOptions(headers, deadline, cancellationToken));
       }
       /// <summary>
-      /// Execute a SELECT query and stream results as Arrow IPC batches.
-      /// The first response contains the Arrow IPC stream header (schema).
-      /// Subsequent responses contain record batch chunks.
+      /// Execute a SELECT query and stream results as rows.
+      /// First response contains the column schema.
+      /// Subsequent responses contain batches of rows.
       /// </summary>
       /// <param name="request">The request to send to the server.</param>
       /// <param name="options">The options for the call.</param>
@@ -238,8 +225,7 @@ namespace DuckDbProto {
         return CallInvoker.AsyncServerStreamingCall(__Method_Query, null, options, request);
       }
       /// <summary>
-      /// Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE, DROP, ...).
-      /// Blocks until the statement's transaction commits.
+      /// Execute a DML or DDL statement.
       /// </summary>
       /// <param name="request">The request to send to the server.</param>
       /// <param name="headers">The initial metadata to send with the call. This parameter is optional.</param>
@@ -252,8 +238,7 @@ namespace DuckDbProto {
         return Execute(request, new grpc::CallOptions(headers, deadline, cancellationToken));
       }
       /// <summary>
-      /// Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE, DROP, ...).
-      /// Blocks until the statement's transaction commits.
+      /// Execute a DML or DDL statement.
       /// </summary>
       /// <param name="request">The request to send to the server.</param>
       /// <param name="options">The options for the call.</param>
@@ -264,8 +249,7 @@ namespace DuckDbProto {
         return CallInvoker.BlockingUnaryCall(__Method_Execute, null, options, request);
       }
       /// <summary>
-      /// Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE, DROP, ...).
-      /// Blocks until the statement's transaction commits.
+      /// Execute a DML or DDL statement.
       /// </summary>
       /// <param name="request">The request to send to the server.</param>
       /// <param name="headers">The initial metadata to send with the call. This parameter is optional.</param>
@@ -278,8 +262,7 @@ namespace DuckDbProto {
         return ExecuteAsync(request, new grpc::CallOptions(headers, deadline, cancellationToken));
       }
       /// <summary>
-      /// Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE, DROP, ...).
-      /// Blocks until the statement's transaction commits.
+      /// Execute a DML or DDL statement.
       /// </summary>
       /// <param name="request">The request to send to the server.</param>
       /// <param name="options">The options for the call.</param>
