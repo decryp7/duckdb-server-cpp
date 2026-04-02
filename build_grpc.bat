@@ -58,6 +58,7 @@ if not exist "%GRPC_BUILD%" mkdir "%GRPC_BUILD%"
 
 cmake -B "%GRPC_BUILD%" -S "%GRPC_SRC%" ^
     -G "Visual Studio 15 2017" -A x64 ^
+    -DCMAKE_SYSTEM_VERSION=10.0 ^
     -DCMAKE_INSTALL_PREFIX="%GRPC_INSTALL%" ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DgRPC_INSTALL=ON ^
