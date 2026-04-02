@@ -92,8 +92,9 @@ namespace DuckDbServer
             finally
             {
                 // Dispose in reverse order. Handles partial construction.
+                // DuckDbServer.Dispose() disposes shardedDb internally.
+                // Do NOT dispose shardedDb separately (double-dispose).
                 duckDbServer?.Dispose();
-                shardedDb?.Dispose();
             }
 
             return 0;

@@ -70,7 +70,7 @@ namespace DuckDbServer
         public Shard NextForRead()
         {
             long idx = Interlocked.Increment(ref nextReadShard);
-            return shards[(int)(Math.Abs(idx) % shards.Length)];
+            return shards[(int)((idx & 0x7FFFFFFFFFFFFFFFL) % shards.Length)];
         }
 
         /// <summary>
