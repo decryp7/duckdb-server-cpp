@@ -45,7 +45,6 @@
  * can be tested with a mock that does not touch a real database.
  */
 
-#include "interfaces.hpp"
 #include "insert_batcher.hpp"
 #include <duckdb.h>
 #include <atomic>
@@ -62,6 +61,20 @@
 #include <vector>
 
 namespace das {
+
+// ── Types previously in interfaces.hpp ───────────────────────────────────────
+
+struct WriteResult {
+    bool        ok    = true;
+    std::string error;
+};
+
+class IWriteSerializer {
+public:
+    virtual ~IWriteSerializer() = default;
+    virtual WriteResult submit(const std::string& sql) = 0;
+    virtual std::future<WriteResult> submit_async(const std::string& sql) = 0;
+};
 
 /**
  * @brief Concrete implementation of IWriteSerializer.
