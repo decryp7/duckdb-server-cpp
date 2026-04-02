@@ -20,9 +20,9 @@ echo  ==================================================
 echo.
 
 rust-server\target\release\duckdb-grpc-server.exe ^
-    --db :memory: ^
+    --db data.duckdb ^
     --port 17777 ^
-    --readers 1 ^
+    --readers 128 ^
     --batch-ms 1 ^
     --batch-max 64 ^
     --batch-size 2048 ^

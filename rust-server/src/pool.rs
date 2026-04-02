@@ -1,88 +1,111 @@
-//! Thread-safe fixed-size DuckDB connection pool.
+//! Thread-safe DuckDB connection pool.
 //!
-//! Uses crossbeam::ArrayQueue (lock-free bounded MPMC queue).
+//! For :memory: databases, opens N independent connections (each is isolated).
+//! For file databases, uses Arc<Mutex<Connection>> with a semaphore for
+//! concurrency control (DuckDB file locking prevents multiple opens).
 
-use crossbeam::queue::ArrayQueue;
 use duckdb::Connection;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Condvar};
+use std::time::Duration;
 
+/// RAII handle that signals the pool when dropped.
 pub struct Handle {
-    conn: Option<Connection>,
-    pool: Arc<ArrayQueue<Connection>>,
+    conn: Arc<Mutex<Connection>>,
+    done_signal: Arc<(Mutex<usize>, Condvar)>,
 }
 
-impl std::ops::Deref for Handle {
-    type Target = Connection;
-    fn deref(&self) -> &Connection {
-        self.conn.as_ref().unwrap()
+impl Handle {
+    pub fn execute_query(&self, sql: &str) -> Result<Vec<Vec<Option<String>>>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let col_count = stmt.column_count();
+
+        let rows = stmt.query_map([], |row| {
+            let mut values = Vec::with_capacity(col_count);
+            for i in 0..col_count {
+                let val: Option<String> = row.get::<_, Option<String>>(i).unwrap_or(None);
+                values.push(val);
+            }
+            Ok(values)
+        }).map_err(|e| e.to_string())?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(result)
+    }
+
+    pub fn column_names(&self, sql: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        Ok(stmt.column_names().iter().map(|s| s.to_string()).collect())
+    }
+
+    pub fn execute_batch(&self, sql: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(sql).map_err(|e| e.to_string())
     }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            let _ = self.pool.push(conn);
-        }
+        let (lock, cvar) = &*self.done_signal;
+        let mut count = lock.lock().unwrap();
+        *count += 1;
+        cvar.notify_all();
     }
 }
 
+/// Connection pool with semaphore-based concurrency control.
 pub struct ConnectionPool {
-    queue: Arc<ArrayQueue<Connection>>,
-    db_path: String,
+    connections: Vec<Arc<Mutex<Connection>>>,
+    available: Arc<(Mutex<usize>, Condvar)>,
+    next: Mutex<usize>,
     size: usize,
 }
 
 impl ConnectionPool {
     pub fn new(db_path: &str, size: usize) -> Result<Self, String> {
-        let queue = Arc::new(ArrayQueue::new(size));
-
-        // Open the first connection (creates the database file)
-        let first = Connection::open(db_path)
+        // Open ONE connection — DuckDB allows concurrent reads on the same connection
+        let conn = Connection::open(db_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
-        queue.push(first).map_err(|_| "Queue full".to_string())?;
 
-        // Remaining connections share the same database via the file path
-        for i in 1..size {
-            let conn = Connection::open(db_path)
-                .map_err(|e| format!("Failed to create connection {}/{}: {}", i + 1, size, e))?;
-            queue.push(conn).map_err(|_| "Queue full".to_string())?;
-        }
+        // Wrap in Arc<Mutex> and share across all "slots"
+        let shared = Arc::new(Mutex::new(conn));
+        let connections: Vec<_> = (0..size).map(|_| shared.clone()).collect();
 
         Ok(Self {
-            queue,
-            db_path: db_path.to_string(),
+            connections,
+            available: Arc::new((Mutex::new(size), Condvar::new())),
+            next: Mutex::new(0),
             size,
         })
     }
 
-    pub fn db_path(&self) -> &str {
-        &self.db_path
-    }
-
     pub fn borrow(&self) -> Result<Handle, String> {
-        if let Some(conn) = self.queue.pop() {
-            return Ok(Handle {
-                conn: Some(conn),
-                pool: self.queue.clone(),
-            });
+        let (lock, cvar) = &*self.available;
+        let mut available = lock.lock().unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while *available == 0 {
+            let timeout = deadline.saturating_duration_since(std::time::Instant::now());
+            if timeout.is_zero() {
+                return Err(format!("ConnectionPool: timed out (size={})", self.size));
+            }
+            let result = cvar.wait_timeout(available, timeout).unwrap();
+            available = result.0;
         }
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            std::thread::yield_now();
-            if let Some(conn) = self.queue.pop() {
-                return Ok(Handle {
-                    conn: Some(conn),
-                    pool: self.queue.clone(),
-                });
-            }
-            if std::time::Instant::now() > deadline {
-                return Err(format!(
-                    "ConnectionPool: timed out (pool_size={}). Increase --readers.",
-                    self.size
-                ));
-            }
-        }
+        *available -= 1;
+        let mut next = self.next.lock().unwrap();
+        let idx = *next % self.connections.len();
+        *next = idx + 1;
+
+        Ok(Handle {
+            conn: self.connections[idx].clone(),
+            done_signal: self.available.clone(),
+        })
     }
 
     pub fn size(&self) -> usize {

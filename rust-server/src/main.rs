@@ -93,89 +93,67 @@ impl DuckDbService for DuckDbServerImpl {
 
         let (tx, rx) = tokio::sync::mpsc::channel(4);
 
-        // Spawn blocking task for DuckDB (it's not async-safe)
         tokio::task::spawn_blocking(move || {
-
-            let conn = match pool.borrow() {
-                Ok(c) => c,
+            let handle = match pool.borrow() {
+                Ok(h) => h,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
-                    let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                    let _ = tx.blocking_send(Err(Status::internal(e)));
                     return;
                 }
             };
 
-            let mut stmt = match conn.prepare(&sql) {
-                Ok(s) => s,
+            // Get column names
+            let col_names = match handle.column_names(&sql) {
+                Ok(n) => n,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
-                    let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                    let _ = tx.blocking_send(Err(Status::internal(e)));
                     return;
                 }
             };
+            let col_count = col_names.len();
 
-            let col_count = stmt.column_count();
-            let col_names: Vec<String> = (0..col_count)
-                .map(|i| stmt.column_name(i).map_or("?".to_string(), |v| v.to_string()))
-                .collect();
-
-            // Determine column types from first query
-            let rows = match stmt.query([]) {
+            // Execute query and get all rows as strings
+            let all_rows = match handle.execute_query(&sql) {
                 Ok(r) => r,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
-                    let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                    let _ = tx.blocking_send(Err(Status::internal(e)));
                     return;
                 }
             };
 
-            // Build column metadata
-            let mut columns: Vec<ColumnMeta> = Vec::with_capacity(col_count);
-            for i in 0..col_count {
-                columns.push(ColumnMeta {
-                    name: col_names[i].clone(),
-                    r#type: ColumnType::TypeString as i32, // default, refined below
-                });
-            }
+            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
+                name: name.clone(),
+                r#type: ColumnType::TypeString as i32,
+            }).collect();
 
-            // Stream rows in columnar batches
+            // Stream in columnar batches
             let mut row_buf: Vec<Vec<Option<String>>> = (0..col_count)
                 .map(|_| Vec::with_capacity(batch_size))
                 .collect();
             let mut rows_in_batch = 0;
             let mut first_batch = true;
 
-            // DuckDB rows iterator
-            let mut row_iter = rows;
-            loop {
-                let row = match row_iter.next() {
-                    Ok(Some(r)) => r,
-                    Ok(None) => break,
-                    Err(e) => {
-                        stat_errors.fetch_add(1, Ordering::Relaxed);
-                        let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
-                        return;
-                    }
-                };
-
+            for row in &all_rows {
                 for c in 0..col_count {
-                    let val: Option<String> = row.get::<_, Option<String>>(c).ok().flatten();
-                    row_buf[c].push(val);
+                    if c < row.len() {
+                        row_buf[c].push(row[c].clone());
+                    } else {
+                        row_buf[c].push(None);
+                    }
                 }
                 rows_in_batch += 1;
 
                 if rows_in_batch >= batch_size {
                     let resp = build_columnar_response(
-                        &mut row_buf,
-                        rows_in_batch,
+                        &mut row_buf, rows_in_batch,
                         if first_batch { Some(&columns) } else { None },
                     );
                     first_batch = false;
                     rows_in_batch = 0;
-
-                    if tx.blocking_send(Ok(resp)).is_err() {
-                        return; // client disconnected
-                    }
+                    if tx.blocking_send(Ok(resp)).is_err() { return; }
                 }
             }
 
@@ -350,12 +328,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create write serializer
     let writer = Arc::new(WriteSerializer::new(&db_path, args.batch_ms, args.batch_max)?);
 
-    // Apply DuckDB performance tuning on one connection
+    // Apply DuckDB performance tuning
     {
-        let conn = pool.borrow()?;
-        let _ = conn.execute_batch("PRAGMA enable_object_cache");
-        let _ = conn.execute_batch("SET preserve_insertion_order=false");
-        let _ = conn.execute_batch("SET checkpoint_threshold='256MB'");
+        let handle = pool.borrow().map_err(|e| e)?;
+        let _ = handle.execute_batch("PRAGMA enable_object_cache");
+        let _ = handle.execute_batch("SET preserve_insertion_order=false");
+        let _ = handle.execute_batch("SET checkpoint_threshold='256MB'");
     }
 
     let server_impl = DuckDbServerImpl {
