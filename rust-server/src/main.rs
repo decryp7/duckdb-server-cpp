@@ -71,36 +71,6 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
-            // Get column names by running DESCRIBE on the query
-            let col_names: Vec<String> = {
-                let describe_sql = format!("DESCRIBE {}", sql);
-                match conn.prepare(&describe_sql).and_then(|mut s| {
-                    let mut names = Vec::new();
-                    let mut rows = s.query([])?;
-                    while let Some(row) = rows.next()? {
-                        let name: String = row.get(0)?;
-                        names.push(name);
-                    }
-                    Ok(names)
-                }) {
-                    Ok(names) if !names.is_empty() => names,
-                    _ => {
-                        // Fallback: run the query and count columns from first row
-                        // Use generic names
-                        let mut s = conn.prepare(&sql).unwrap();
-                        let col_count = s.column_count();
-                        (0..col_count).map(|i| format!("col_{}", i)).collect()
-                    }
-                }
-            };
-            let col_count = col_names.len();
-
-            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
-                name: name.clone(),
-                r#type: ColumnType::TypeString as i32,
-            }).collect();
-
-            // Execute the actual query
             let mut stmt = match conn.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
@@ -110,13 +80,49 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
-            let rows = match stmt.query_map([], |row| {
-                let mut values = Vec::with_capacity(col_count);
-                for i in 0..col_count {
-                    values.push(row.get::<_, Option<String>>(i).unwrap_or(None));
+            // Execute query first
+            let mut row_iter = match stmt.query([]) {
+                Ok(r) => r,
+                Err(e) => {
+                    stat_errors.fetch_add(1, Ordering::Relaxed);
+                    let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                    return;
                 }
-                Ok(values)
-            }) {
+            };
+
+            // Get column names via rows.as_ref() — only works AFTER query()
+            let col_names: Vec<String> = row_iter.as_ref()
+                .map(|s| s.column_names())
+                .unwrap_or_default();
+            let col_count = col_names.len();
+
+            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
+                name: name.clone(),
+                r#type: ColumnType::TypeString as i32,
+            }).collect();
+
+            // Collect all rows (must consume iterator before dropping stmt borrow)
+            let mut all_rows: Vec<Vec<Option<String>>> = Vec::new();
+            loop {
+                match row_iter.next() {
+                    Ok(Some(row)) => {
+                        let mut values = Vec::with_capacity(col_count);
+                        for i in 0..col_count {
+                            values.push(row.get::<_, Option<String>>(i).unwrap_or(None));
+                        }
+                        all_rows.push(values);
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        stat_errors.fetch_add(1, Ordering::Relaxed);
+                        let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                        return;
+                    }
+                }
+            }
+
+            let rows: Result<Vec<Vec<Option<String>>>, String> = Ok(all_rows);
+            let rows = match rows {
                 Ok(r) => r,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
