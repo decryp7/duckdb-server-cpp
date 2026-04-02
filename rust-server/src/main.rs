@@ -71,27 +71,36 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
-            // Two-phase: first execute to get column names, then query for data.
-            // DuckDB is fast enough that the double-execute is negligible.
-            let (col_names, col_count) = {
-                let stmt = match conn.prepare(&sql) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        stat_errors.fetch_add(1, Ordering::Relaxed);
-                        let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
-                        return;
+            // Get column names by running DESCRIBE on the query
+            let col_names: Vec<String> = {
+                let describe_sql = format!("DESCRIBE {}", sql);
+                match conn.prepare(&describe_sql).and_then(|mut s| {
+                    let mut names = Vec::new();
+                    let mut rows = s.query([])?;
+                    while let Some(row) = rows.next()? {
+                        let name: String = row.get(0)?;
+                        names.push(name);
                     }
-                };
-                let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-                let count = stmt.column_count();
-                (names, count)
+                    Ok(names)
+                }) {
+                    Ok(names) if !names.is_empty() => names,
+                    _ => {
+                        // Fallback: run the query and count columns from first row
+                        // Use generic names
+                        let mut s = conn.prepare(&sql).unwrap();
+                        let col_count = s.column_count();
+                        (0..col_count).map(|i| format!("col_{}", i)).collect()
+                    }
+                }
             };
+            let col_count = col_names.len();
 
             let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
                 name: name.clone(),
                 r#type: ColumnType::TypeString as i32,
             }).collect();
 
+            // Execute the actual query
             let mut stmt = match conn.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
