@@ -350,7 +350,7 @@ grpc::Status DuckGrpcServer::Query(
             // Fill columnar data with memcpy fast path
             for (idx_t c = 0; c < col_count; ++c) {
                 auto* cd = response.add_data();
-                duckdb_vector vec = duckdb_data_chunk_get_column(chunk, c);
+                duckdb_vector vec = duckdb_data_chunk_get_vector(chunk, c);
                 fill_column_from_vector(vec, col_types[c], rows_in_chunk, cd);
             }
 

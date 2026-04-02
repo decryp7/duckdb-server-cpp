@@ -4,7 +4,7 @@
 //! and executes them in batched transactions for maximum throughput.
 //! Also supports bulk insert via DuckDB's Appender API.
 
-use crate::proto::{ColumnData, ColumnMeta, ColumnType};
+use crate::proto::{ColumnData, ColumnMeta};
 use duckdb::Connection;
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -78,36 +78,44 @@ impl WriteSerializer {
             .appender(table)
             .map_err(|e| format!("Appender failed for {}: {}", table, e))?;
 
+        // Build INSERT SQL from columnar data (Appender API varies by duckdb crate version)
+        let col_count = data.len();
+        if col_count == 0 || row_count == 0 {
+            return Ok(0);
+        }
+
+        // Use multi-row INSERT for maximum compatibility
+        let mut sql = format!("INSERT INTO {} VALUES ", table);
         for r in 0..row_count {
-            for cd in data.iter() {
+            if r > 0 { sql.push_str(", "); }
+            sql.push('(');
+            for c in 0..col_count {
+                if c > 0 { sql.push_str(", "); }
+                let cd = &data[c];
                 let is_null = cd.null_indices.contains(&(r as i32));
                 if is_null {
-                    appender
-                        .append_null()
-                        .map_err(|e| format!("Append null failed: {}", e))?;
+                    sql.push_str("NULL");
                 } else if r < cd.int32_values.len() {
-                    appender
-                        .append_row([cd.int32_values[r]])
-                        .map_err(|e| format!("Append int32 failed: {}", e))?;
-                    continue; // appended full row
+                    sql.push_str(&cd.int32_values[r].to_string());
                 } else if r < cd.int64_values.len() {
-                    appender
-                        .append_row([cd.int64_values[r]])
-                        .map_err(|e| format!("Append int64 failed: {}", e))?;
-                    continue;
+                    sql.push_str(&cd.int64_values[r].to_string());
                 } else if r < cd.double_values.len() {
-                    appender
-                        .append_row([cd.double_values[r]])
-                        .map_err(|e| format!("Append double failed: {}", e))?;
-                    continue;
+                    sql.push_str(&cd.double_values[r].to_string());
+                } else if r < cd.bool_values.len() {
+                    sql.push_str(if cd.bool_values[r] { "true" } else { "false" });
                 } else if r < cd.string_values.len() {
-                    appender
-                        .append_row([cd.string_values[r].as_str()])
-                        .map_err(|e| format!("Append string failed: {}", e))?;
-                    continue;
+                    sql.push('\'');
+                    sql.push_str(&cd.string_values[r].replace('\'', "''"));
+                    sql.push('\'');
+                } else {
+                    sql.push_str("NULL");
                 }
             }
+            sql.push(')');
         }
+
+        conn.execute_batch(&sql)
+            .map_err(|e| format!("Bulk insert failed: {}", e))?;
 
         appender
             .flush()

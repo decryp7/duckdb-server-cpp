@@ -13,7 +13,6 @@ mod pool;
 mod writer;
 
 use clap::Parser;
-use duckdb::Connection;
 use pool::ConnectionPool;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -119,7 +118,7 @@ impl DuckDbService for DuckDbServerImpl {
 
             let col_count = stmt.column_count();
             let col_names: Vec<String> = (0..col_count)
-                .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
+                .map(|i| stmt.column_name(i).map_or("?".to_string(), |v| v.to_string()))
                 .collect();
 
             // Determine column types from first query
