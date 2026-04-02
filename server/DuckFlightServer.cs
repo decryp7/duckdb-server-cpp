@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using DuckDbProto;
@@ -7,13 +8,11 @@ using Grpc.Core;
 namespace DuckArrowServer
 {
     /// <summary>
-    /// DuckDB gRPC server — extreme performance edition.
+    /// DuckDB gRPC server — columnar encoding for extreme performance.
     ///
-    /// Key optimizations:
-    ///   - Typed values (int64/double/bool) skip ToString/Parse entirely
-    ///   - GetValues() bulk reads all columns in one call
-    ///   - Column type mapping cached per query (not per row)
-    ///   - Shared null TypedValue instance (no allocation per null cell)
+    /// Values are packed into typed arrays per column (not per-cell objects).
+    /// 1000 rows × 10 columns = 10 ColumnData objects instead of 11,000 TypedValue objects.
+    /// Packed repeated fields use minimal protobuf overhead.
     /// </summary>
     public sealed class DuckFlightServer : DuckDbService.DuckDbServiceBase, IDisposable
     {
@@ -26,9 +25,6 @@ namespace DuckArrowServer
         private long errors;
 
         private readonly int batchSize;
-
-        // Shared null value — reused across all rows to avoid allocation.
-        private static readonly TypedValue NullValue = new TypedValue { IsNull = true };
 
         public DuckFlightServer(ServerConfig config, IConnectionPool readPool, IWriteSerializer writer)
         {
@@ -55,7 +51,7 @@ namespace DuckArrowServer
             };
         }
 
-        // ── Query: stream typed rows ─────────────────────────────────────────
+        // ── Query: columnar streaming ────────────────────────────────────────
 
         public override async Task Query(
             QueryRequest request,
@@ -74,61 +70,62 @@ namespace DuckArrowServer
                     {
                         int colCount = reader.FieldCount;
 
-                        // Map CLR types to proto ColumnType (cached for all rows).
+                        // Cache column types
                         var colTypes = new ColumnType[colCount];
                         var clrTypes = new Type[colCount];
-                        var schemaResponse = new QueryResponse();
+                        var meta = new List<ColumnMeta>(colCount);
 
                         for (int c = 0; c < colCount; c++)
                         {
                             clrTypes[c] = reader.GetFieldType(c);
                             colTypes[c] = MapColumnType(clrTypes[c]);
-                            schemaResponse.Columns.Add(new ColumnInfo
+                            meta.Add(new ColumnMeta
                             {
                                 Name = reader.GetName(c),
                                 Type = colTypes[c]
                             });
                         }
-                        await responseStream.WriteAsync(schemaResponse).ConfigureAwait(false);
 
-                        // Stream rows with typed values — no ToString overhead.
-                        var batch = new QueryResponse();
-                        int rowsInBatch = 0;
+                        // Pre-allocate column builders
+                        var builders = new ColumnBuilder[colCount];
+                        for (int c = 0; c < colCount; c++)
+                            builders[c] = new ColumnBuilder(colTypes[c], batchSize);
+
                         var values = new object[colCount];
+                        int rowsInBatch = 0;
+                        bool firstBatch = true;
 
                         while (reader.Read())
                         {
                             reader.GetValues(values);
 
-                            var row = new Row();
                             for (int c = 0; c < colCount; c++)
-                            {
-                                row.Values.Add(ConvertToTypedValue(values[c], colTypes[c]));
-                            }
-                            batch.Rows.Add(row);
+                                builders[c].Add(values[c], rowsInBatch);
+
                             rowsInBatch++;
 
                             if (rowsInBatch >= batchSize)
                             {
-                                await responseStream.WriteAsync(batch).ConfigureAwait(false);
-                                batch = new QueryResponse();
+                                await SendBatch(responseStream, builders, colCount, rowsInBatch,
+                                    firstBatch ? meta : null).ConfigureAwait(false);
+                                firstBatch = false;
                                 rowsInBatch = 0;
+                                for (int c = 0; c < colCount; c++)
+                                    builders[c].Reset();
                             }
                         }
 
-                        if (rowsInBatch > 0)
+                        if (rowsInBatch > 0 || firstBatch)
                         {
-                            await responseStream.WriteAsync(batch).ConfigureAwait(false);
+                            await SendBatch(responseStream, builders, colCount, rowsInBatch,
+                                firstBatch ? meta : null).ConfigureAwait(false);
                         }
                     }
                 }
 
                 Interlocked.Increment(ref queriesRead);
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref errors);
@@ -136,74 +133,184 @@ namespace DuckArrowServer
             }
         }
 
-        // ── Type mapping ─────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Convert a CLR value to a TypedValue without ToString().
-        /// int/long/double/bool are encoded as native protobuf types (binary).
-        /// Only strings and unknown types use ToString() as fallback.
-        /// </summary>
-        private static TypedValue ConvertToTypedValue(object value, ColumnType colType)
+        private static async Task SendBatch(
+            IServerStreamWriter<QueryResponse> stream,
+            ColumnBuilder[] builders, int colCount, int rowCount,
+            List<ColumnMeta> meta)
         {
-            if (value == null || value is DBNull)
-                return NullValue;
+            var response = new QueryResponse { RowCount = rowCount };
 
-            switch (colType)
+            if (meta != null)
+                response.Columns.AddRange(meta);
+
+            for (int c = 0; c < colCount; c++)
+                response.Data.Add(builders[c].Build());
+
+            await stream.WriteAsync(response).ConfigureAwait(false);
+        }
+
+        // ── Column builder: accumulates values into packed arrays ─────────────
+
+        private sealed class ColumnBuilder
+        {
+            private readonly ColumnType type;
+            private List<bool> bools;
+            private List<int> int32s;
+            private List<long> int64s;
+            private List<float> floats;
+            private List<double> doubles;
+            private List<string> strings;
+            private List<int> nullIndices;
+
+            public ColumnBuilder(ColumnType type, int capacity)
             {
-                case ColumnType.TypeBoolean:
-                    return new TypedValue { BoolValue = Convert.ToBoolean(value) };
+                this.type = type;
+                AllocateStorage(capacity);
+            }
 
-                case ColumnType.TypeInt32:
-                case ColumnType.TypeInt8:
-                case ColumnType.TypeInt16:
-                case ColumnType.TypeUint8:
-                case ColumnType.TypeUint16:
-                    return new TypedValue { Int32Value = Convert.ToInt32(value) };
+            public void Add(object value, int rowIndex)
+            {
+                if (value == null || value is DBNull)
+                {
+                    if (nullIndices == null)
+                        nullIndices = new List<int>();
+                    nullIndices.Add(rowIndex);
+                    AddDefault();
+                    return;
+                }
 
-                case ColumnType.TypeInt64:
-                case ColumnType.TypeUint32:
-                case ColumnType.TypeUint64:
-                    return new TypedValue { Int64Value = Convert.ToInt64(value) };
+                switch (type)
+                {
+                    case ColumnType.TypeBoolean:
+                        bools.Add(Convert.ToBoolean(value));
+                        break;
+                    case ColumnType.TypeInt32:
+                    case ColumnType.TypeInt8:
+                    case ColumnType.TypeInt16:
+                    case ColumnType.TypeUint8:
+                    case ColumnType.TypeUint16:
+                        int32s.Add(Convert.ToInt32(value));
+                        break;
+                    case ColumnType.TypeInt64:
+                    case ColumnType.TypeUint32:
+                    case ColumnType.TypeUint64:
+                        int64s.Add(Convert.ToInt64(value));
+                        break;
+                    case ColumnType.TypeFloat:
+                        floats.Add(Convert.ToSingle(value));
+                        break;
+                    case ColumnType.TypeDouble:
+                    case ColumnType.TypeDecimal:
+                        doubles.Add(Convert.ToDouble(value));
+                        break;
+                    default:
+                        strings.Add(value.ToString());
+                        break;
+                }
+            }
 
-                case ColumnType.TypeFloat:
-                case ColumnType.TypeDouble:
-                case ColumnType.TypeDecimal:
-                    return new TypedValue { DoubleValue = Convert.ToDouble(value) };
+            private void AddDefault()
+            {
+                switch (type)
+                {
+                    case ColumnType.TypeBoolean: bools.Add(false); break;
+                    case ColumnType.TypeInt32:
+                    case ColumnType.TypeInt8:
+                    case ColumnType.TypeInt16:
+                    case ColumnType.TypeUint8:
+                    case ColumnType.TypeUint16: int32s.Add(0); break;
+                    case ColumnType.TypeInt64:
+                    case ColumnType.TypeUint32:
+                    case ColumnType.TypeUint64: int64s.Add(0); break;
+                    case ColumnType.TypeFloat: floats.Add(0); break;
+                    case ColumnType.TypeDouble:
+                    case ColumnType.TypeDecimal: doubles.Add(0); break;
+                    default: strings.Add(""); break;
+                }
+            }
 
-                case ColumnType.TypeBlob:
-                    if (value is byte[] bytes)
-                        return new TypedValue { BlobValue = Google.Protobuf.ByteString.CopyFrom(bytes) };
-                    return new TypedValue { StringValue = value.ToString() };
+            public ColumnData Build()
+            {
+                var cd = new ColumnData();
+                switch (type)
+                {
+                    case ColumnType.TypeBoolean: cd.BoolValues.AddRange(bools); break;
+                    case ColumnType.TypeInt32:
+                    case ColumnType.TypeInt8:
+                    case ColumnType.TypeInt16:
+                    case ColumnType.TypeUint8:
+                    case ColumnType.TypeUint16: cd.Int32Values.AddRange(int32s); break;
+                    case ColumnType.TypeInt64:
+                    case ColumnType.TypeUint32:
+                    case ColumnType.TypeUint64: cd.Int64Values.AddRange(int64s); break;
+                    case ColumnType.TypeFloat: cd.FloatValues.AddRange(floats); break;
+                    case ColumnType.TypeDouble:
+                    case ColumnType.TypeDecimal: cd.DoubleValues.AddRange(doubles); break;
+                    default: cd.StringValues.AddRange(strings); break;
+                }
+                if (nullIndices != null)
+                    cd.NullIndices.AddRange(nullIndices);
+                return cd;
+            }
 
-                default:
-                    // String, timestamp, date, time, unknown — use ToString as fallback.
-                    return new TypedValue { StringValue = value.ToString() };
+            public void Reset()
+            {
+                switch (type)
+                {
+                    case ColumnType.TypeBoolean: bools.Clear(); break;
+                    case ColumnType.TypeInt32:
+                    case ColumnType.TypeInt8:
+                    case ColumnType.TypeInt16:
+                    case ColumnType.TypeUint8:
+                    case ColumnType.TypeUint16: int32s.Clear(); break;
+                    case ColumnType.TypeInt64:
+                    case ColumnType.TypeUint32:
+                    case ColumnType.TypeUint64: int64s.Clear(); break;
+                    case ColumnType.TypeFloat: floats.Clear(); break;
+                    case ColumnType.TypeDouble:
+                    case ColumnType.TypeDecimal: doubles.Clear(); break;
+                    default: strings.Clear(); break;
+                }
+                if (nullIndices != null) nullIndices.Clear();
+            }
+
+            private void AllocateStorage(int capacity)
+            {
+                switch (type)
+                {
+                    case ColumnType.TypeBoolean: bools = new List<bool>(capacity); break;
+                    case ColumnType.TypeInt32:
+                    case ColumnType.TypeInt8:
+                    case ColumnType.TypeInt16:
+                    case ColumnType.TypeUint8:
+                    case ColumnType.TypeUint16: int32s = new List<int>(capacity); break;
+                    case ColumnType.TypeInt64:
+                    case ColumnType.TypeUint32:
+                    case ColumnType.TypeUint64: int64s = new List<long>(capacity); break;
+                    case ColumnType.TypeFloat: floats = new List<float>(capacity); break;
+                    case ColumnType.TypeDouble:
+                    case ColumnType.TypeDecimal: doubles = new List<double>(capacity); break;
+                    default: strings = new List<string>(capacity); break;
+                }
             }
         }
 
-        /// <summary>
-        /// Map CLR type to proto ColumnType. Called once per column per query.
-        /// </summary>
         private static ColumnType MapColumnType(Type clrType)
         {
-            if (clrType == typeof(bool))           return ColumnType.TypeBoolean;
-            if (clrType == typeof(sbyte))          return ColumnType.TypeInt8;
-            if (clrType == typeof(short))          return ColumnType.TypeInt16;
-            if (clrType == typeof(int))            return ColumnType.TypeInt32;
-            if (clrType == typeof(long))           return ColumnType.TypeInt64;
-            if (clrType == typeof(byte))           return ColumnType.TypeUint8;
-            if (clrType == typeof(ushort))         return ColumnType.TypeUint16;
-            if (clrType == typeof(uint))           return ColumnType.TypeUint32;
-            if (clrType == typeof(ulong))          return ColumnType.TypeUint64;
-            if (clrType == typeof(float))          return ColumnType.TypeFloat;
-            if (clrType == typeof(double))         return ColumnType.TypeDouble;
-            if (clrType == typeof(decimal))        return ColumnType.TypeDecimal;
-            if (clrType == typeof(string))         return ColumnType.TypeString;
-            if (clrType == typeof(byte[]))         return ColumnType.TypeBlob;
-            if (clrType == typeof(DateTime))       return ColumnType.TypeTimestamp;
-            if (clrType == typeof(DateTimeOffset)) return ColumnType.TypeTimestamp;
-            if (clrType == typeof(TimeSpan))       return ColumnType.TypeTime;
-            return ColumnType.TypeString; // fallback
+            if (clrType == typeof(bool))    return ColumnType.TypeBoolean;
+            if (clrType == typeof(sbyte))   return ColumnType.TypeInt8;
+            if (clrType == typeof(short))   return ColumnType.TypeInt16;
+            if (clrType == typeof(int))     return ColumnType.TypeInt32;
+            if (clrType == typeof(long))    return ColumnType.TypeInt64;
+            if (clrType == typeof(byte))    return ColumnType.TypeUint8;
+            if (clrType == typeof(ushort))  return ColumnType.TypeUint16;
+            if (clrType == typeof(uint))    return ColumnType.TypeUint32;
+            if (clrType == typeof(ulong))   return ColumnType.TypeUint64;
+            if (clrType == typeof(float))   return ColumnType.TypeFloat;
+            if (clrType == typeof(double))  return ColumnType.TypeDouble;
+            if (clrType == typeof(decimal)) return ColumnType.TypeDecimal;
+            if (clrType == typeof(byte[]))  return ColumnType.TypeBlob;
+            return ColumnType.TypeString;
         }
 
         // ── Execute / Ping / GetStats ────────────────────────────────────────
@@ -214,16 +321,14 @@ namespace DuckArrowServer
             if (string.IsNullOrEmpty(sql))
             {
                 Interlocked.Increment(ref errors);
-                return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL statement is required" });
+                return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL required" });
             }
-
             var result = writer.Submit(sql);
             if (!result.Ok)
             {
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = result.Error });
             }
-
             Interlocked.Increment(ref queriesWrite);
             return Task.FromResult(new ExecuteResponse { Success = true });
         }
@@ -238,16 +343,12 @@ namespace DuckArrowServer
             var s = GetStats();
             return Task.FromResult(new StatsResponse
             {
-                QueriesRead = s.QueriesRead,
-                QueriesWrite = s.QueriesWrite,
-                Errors = s.Errors,
-                ReaderPoolSize = s.ReaderPoolSize,
-                Port = s.Port
+                QueriesRead = s.QueriesRead, QueriesWrite = s.QueriesWrite,
+                Errors = s.Errors, ReaderPoolSize = s.ReaderPoolSize, Port = s.Port
             });
         }
 
         private int disposed;
-
         public void Dispose()
         {
             if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;

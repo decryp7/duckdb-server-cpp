@@ -1,10 +1,12 @@
-// DuckDB gRPC Server — Protocol Definition v5.1
+// DuckDB gRPC Server — Protocol Definition v5.2
 //
-// Pure protobuf, no Arrow dependency.
-// Uses typed values (int64, double, bool, string, bytes) to avoid
-// ToString/Parse overhead. ~3x faster than string-only encoding.
+// COLUMNAR encoding: values are packed into typed arrays per column,
+// not wrapped in per-cell messages. This eliminates ~99% of protobuf
+// object allocations compared to row-by-row encoding.
 //
-// Cross-language: generate stubs with protoc for any language.
+// 1000 rows × 10 columns:
+//   Row format:  10,000 TypedValue objects + 1,000 Row objects = 11,000 allocs
+//   Columnar:    10 Column objects with packed repeated fields = 10 allocs
 
 syntax = "proto3";
 
@@ -25,12 +27,15 @@ message QueryRequest {
   string sql = 1;
 }
 
+// Each QueryResponse contains a batch of rows in COLUMNAR format.
+// First response includes column metadata. All responses include data columns.
 message QueryResponse {
-  repeated ColumnInfo columns = 1;  // First message only
-  repeated Row rows = 2;           // Subsequent messages
+  repeated ColumnMeta columns = 1;   // Column metadata (first message only)
+  repeated ColumnData data = 2;      // Column data (every message)
+  int32 row_count = 3;               // Number of rows in this batch
 }
 
-message ColumnInfo {
+message ColumnMeta {
   string name = 1;
   ColumnType type = 2;
 }
@@ -56,26 +61,25 @@ enum ColumnType {
   TYPE_UINT64 = 17;
 }
 
-// A row of typed values. Using oneof avoids ToString/Parse overhead.
-message Row {
-  repeated TypedValue values = 1;
-}
+// Columnar data for one column in a batch.
+// Only one of the repeated fields is populated, based on ColumnType.
+// Packed repeated fields use minimal protobuf overhead.
+//
+// NULL handling: the nulls bitmask indicates which row indices are null.
+// If nulls is empty, no values are null.
+message ColumnData {
+  // Packed arrays — one per type. Only one is populated per column.
+  repeated bool bool_values = 1 [packed = true];
+  repeated int32 int32_values = 2 [packed = true];
+  repeated int64 int64_values = 3 [packed = true];
+  repeated float float_values = 4 [packed = true];
+  repeated double double_values = 5 [packed = true];
+  repeated string string_values = 6;
+  repeated bytes blob_values = 7;
 
-// A single typed value. Only one field is set based on the column type.
-// This is ~3x faster than encoding everything as strings because:
-//   - int64/double are encoded as 8 raw bytes (no formatting)
-//   - bool is 1 byte (not "True"/"False" string)
-//   - protobuf varint encoding is faster than decimal string formatting
-message TypedValue {
-  oneof kind {
-    bool is_null = 1;       // NULL value
-    bool bool_value = 2;    // BOOLEAN
-    int32 int32_value = 3;  // INTEGER, SMALLINT, TINYINT
-    int64 int64_value = 4;  // BIGINT
-    double double_value = 5;// DOUBLE, FLOAT, DECIMAL
-    string string_value = 6;// VARCHAR, TIMESTAMP, DATE, TIME, etc.
-    bytes blob_value = 7;   // BLOB
-  }
+  // Null bitmask: indices of rows that are NULL.
+  // If empty, all values are non-null.
+  repeated int32 null_indices = 15 [packed = true];
 }
 
 // ── Execute ──────────────────────────────────────────────────────────────────
