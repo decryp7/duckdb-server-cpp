@@ -280,23 +280,11 @@ grpc::Status DuckGrpcServer::Query(
     try {
         auto handle = read_pool_->borrow();
 
-        // ── Step 1: Prepare and execute streaming ────────────────────────
-        // duckdb_execute_prepared_streaming returns chunks incrementally
-        // as DuckDB produces them. Memory = O(one chunk) not O(full result).
-        // Time-to-first-byte = time to produce first ~2048 rows, not full query.
-        duckdb_prepared_statement stmt = nullptr;
-        if (duckdb_prepare(handle.get(), request->sql().c_str(), &stmt) == DuckDBError) {
-            std::string err = duckdb_prepare_error(stmt);
-            duckdb_destroy_prepare(&stmt);
-            stat_errors_.fetch_add(1);
-            return grpc::Status(grpc::StatusCode::INTERNAL, err);
-        }
-
+        // Execute query (materialized — simpler and more compatible than streaming)
         duckdb_result result;
-        if (duckdb_execute_prepared_streaming(stmt, &result) == DuckDBError) {
+        if (duckdb_query(handle.get(), request->sql().c_str(), &result) == DuckDBError) {
             std::string err = duckdb_result_error(&result);
             duckdb_destroy_result(&result);
-            duckdb_destroy_prepare(&stmt);
             stat_errors_.fetch_add(1);
             return grpc::Status(grpc::StatusCode::INTERNAL, err);
         }
@@ -311,19 +299,15 @@ grpc::Status DuckGrpcServer::Query(
             col_names[c] = duckdb_column_name(&result, c);
         }
 
-        // ── Step 2: Stream chunks ────────────────────────────────────────
-        // Reuse response object: Clear() retains allocated memory,
-        // so Reserve() only allocates once across all chunks (20-40% less alloc).
+        // Iterate chunks using duckdb_fetch_chunk (auto-advances, returns nullptr at end)
         duckdb::v1::QueryResponse response;
         bool first_chunk = true;
         duckdb_data_chunk chunk;
 
-        while ((chunk = duckdb_stream_fetch_chunk(result)) != nullptr) {
-            // Check client cancellation
+        while ((chunk = duckdb_fetch_chunk(result)) != nullptr) {
             if (context->IsCancelled()) {
                 duckdb_destroy_data_chunk(&chunk);
                 duckdb_destroy_result(&result);
-                duckdb_destroy_prepare(&stmt);
                 return grpc::Status(grpc::StatusCode::CANCELLED, "Client disconnected");
             }
 
@@ -333,11 +317,9 @@ grpc::Status DuckGrpcServer::Query(
                 continue;
             }
 
-            // Reuse: Clear() keeps allocated memory from previous iteration
             response.Clear();
             response.set_row_count(static_cast<int>(rows_in_chunk));
 
-            // First chunk: include column metadata
             if (first_chunk) {
                 for (idx_t c = 0; c < col_count; ++c) {
                     auto* meta = response.add_columns();
@@ -347,7 +329,6 @@ grpc::Status DuckGrpcServer::Query(
                 first_chunk = false;
             }
 
-            // Fill columnar data with memcpy fast path
             for (idx_t c = 0; c < col_count; ++c) {
                 auto* cd = response.add_data();
                 duckdb_vector vec = duckdb_data_chunk_get_vector(chunk, c);
@@ -355,16 +336,10 @@ grpc::Status DuckGrpcServer::Query(
             }
 
             duckdb_destroy_data_chunk(&chunk);
-
-            // Write coalescing: set_buffer_hint() tells gRPC "more writes coming,
-            // don't flush yet." This coalesces multiple HTTP/2 DATA frames into
-            // fewer sendmsg() syscalls (15-30% streaming throughput improvement).
-            // The last write omits the hint, triggering the flush.
             writer->Write(response, grpc::WriteOptions().set_buffer_hint());
         }
 
-        // Final flush: write without buffer_hint to trigger send.
-        // For empty results, send schema-only.
+        // Final flush
         response.Clear();
         response.set_row_count(0);
         if (first_chunk) {
@@ -374,13 +349,11 @@ grpc::Status DuckGrpcServer::Query(
                 meta->set_type(col_types[c]);
             }
         }
-        // WriteLast: signals end-of-stream + flushes all buffered writes
         grpc::WriteOptions last_opts;
         last_opts.set_last_message();
         writer->WriteLast(response, last_opts);
 
         duckdb_destroy_result(&result);
-        duckdb_destroy_prepare(&stmt);
         stat_queries_read_.fetch_add(1);
         return grpc::Status::OK;
 
