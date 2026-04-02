@@ -499,7 +499,7 @@ grpc::Status DuckGrpcServer::GetStats(
     return grpc::Status::OK;
 }
 
-// ─── BulkInsert: Appender API (100x faster than INSERT SQL) ──────────────────
+// ─── BulkInsert: build INSERT SQL and route through write_to_all ─────────────
 
 grpc::Status DuckGrpcServer::BulkInsert(
     grpc::ServerContext*,
