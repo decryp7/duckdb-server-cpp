@@ -322,18 +322,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.db.clone()
     };
 
-    // Create connection pool
-    let pool = Arc::new(ConnectionPool::new(&db_path, readers)?);
+    // Open ONE connection, share between pool and writer
+    let shared_conn = Arc::new(std::sync::Mutex::new(
+        duckdb::Connection::open(&db_path).map_err(|e| e.to_string())?
+    ));
 
-    // Create write serializer
-    let writer = Arc::new(WriteSerializer::new(&db_path, args.batch_ms, args.batch_max)?);
+    let pool = Arc::new(ConnectionPool::from_shared(shared_conn.clone(), readers));
+    let writer = Arc::new(WriteSerializer::new(shared_conn.clone(), args.batch_ms, args.batch_max)?);
 
     // Apply DuckDB performance tuning
     {
-        let handle = pool.borrow().map_err(|e| e)?;
-        let _ = handle.execute_batch("PRAGMA enable_object_cache");
-        let _ = handle.execute_batch("SET preserve_insertion_order=false");
-        let _ = handle.execute_batch("SET checkpoint_threshold='256MB'");
+        let c = shared_conn.lock().unwrap();
+        let _ = c.execute_batch("PRAGMA enable_object_cache");
+        let _ = c.execute_batch("SET preserve_insertion_order=false");
+        let _ = c.execute_batch("SET checkpoint_threshold='256MB'");
     }
 
     let server_impl = DuckDbServerImpl {

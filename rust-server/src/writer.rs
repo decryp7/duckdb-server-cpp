@@ -3,7 +3,7 @@
 use crate::proto::{ColumnData, ColumnMeta};
 use duckdb::Connection;
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -14,30 +14,27 @@ struct WriteRequest {
 
 pub struct WriteSerializer {
     request_tx: Mutex<mpsc::Sender<WriteRequest>>,
-    writer_conn: Mutex<Connection>,
+    writer_conn: Arc<Mutex<Connection>>,
     _writer_thread: thread::JoinHandle<()>,
 }
 
 impl WriteSerializer {
-    pub fn new(db_path: &str, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| format!("Writer connection failed: {}", e))?;
-
-        let writer_conn = Connection::open(db_path)
-            .map_err(|e| format!("Bulk insert connection failed: {}", e))?;
+    pub fn new(shared_conn: Arc<Mutex<Connection>>, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
+        let conn_for_thread = shared_conn.clone();
+        let writer_conn_holder = shared_conn;
 
         let (tx, rx) = mpsc::channel::<WriteRequest>();
 
         let handle = thread::Builder::new()
             .name("duckdb-writer".into())
             .spawn(move || {
-                drain_loop(conn, rx, batch_ms, batch_max);
+                drain_loop(conn_for_thread, rx, batch_ms, batch_max);
             })
             .map_err(|e| format!("Writer thread failed: {}", e))?;
 
         Ok(Self {
             request_tx: Mutex::new(tx),
-            writer_conn: Mutex::new(writer_conn),
+            writer_conn: writer_conn_holder,
             _writer_thread: handle,
         })
     }
@@ -59,6 +56,7 @@ impl WriteSerializer {
         data: &[ColumnData], row_count: usize,
     ) -> Result<usize, String> {
         let conn = self.writer_conn.lock().unwrap();
+        // conn is now MutexGuard<Connection>
         let col_count = data.len();
         if col_count == 0 || row_count == 0 { return Ok(0); }
 
@@ -89,7 +87,7 @@ impl WriteSerializer {
     }
 }
 
-fn drain_loop(conn: Connection, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64, batch_max: usize) {
+fn drain_loop(conn: Arc<Mutex<Connection>>, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64, batch_max: usize) {
     loop {
         let first = match rx.recv() { Ok(r) => r, Err(_) => return };
         let mut batch = vec![first];
@@ -107,20 +105,21 @@ fn drain_loop(conn: Connection, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64,
     }
 }
 
-fn execute_batch(conn: &Connection, batch: &[WriteRequest]) {
-    if conn.execute_batch("BEGIN").is_err() {
-        for req in batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
+fn execute_batch(conn: &Arc<Mutex<Connection>>, batch: &[WriteRequest]) {
+    let c = conn.lock().unwrap();
+    if c.execute_batch("BEGIN").is_err() {
+        for req in batch { let _ = req.result_tx.send(c.execute_batch(&req.sql).map_err(|e| e.to_string())); }
         return;
     }
     let mut all_ok = true;
-    for req in batch { if conn.execute_batch(&req.sql).is_err() { all_ok = false; break; } }
+    for req in batch { if c.execute_batch(&req.sql).is_err() { all_ok = false; break; } }
     if !all_ok {
-        let _ = conn.execute_batch("ROLLBACK");
-        for req in batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
+        let _ = c.execute_batch("ROLLBACK");
+        for req in batch { let _ = req.result_tx.send(c.execute_batch(&req.sql).map_err(|e| e.to_string())); }
         return;
     }
-    if conn.execute_batch("COMMIT").is_err() {
-        for req in batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
+    if c.execute_batch("COMMIT").is_err() {
+        for req in batch { let _ = req.result_tx.send(c.execute_batch(&req.sql).map_err(|e| e.to_string())); }
         return;
     }
     for req in batch { let _ = req.result_tx.send(Ok(())); }
