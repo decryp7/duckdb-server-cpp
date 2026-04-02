@@ -1,7 +1,7 @@
 //! Write serializer: batches concurrent DML into single transactions.
 
 use crate::proto::{ColumnData, ColumnMeta};
-use duckdb::{Connection, Database};
+use duckdb::Connection;
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
@@ -19,11 +19,11 @@ pub struct WriteSerializer {
 }
 
 impl WriteSerializer {
-    pub fn new(db: &Database, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
-        let conn = db.connect()
+    pub fn new(db_path: &str, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
+        let conn = Connection::open(db_path)
             .map_err(|e| format!("Writer connection failed: {}", e))?;
 
-        let writer_conn = db.connect()
+        let writer_conn = Connection::open(db_path)
             .map_err(|e| format!("Bulk insert connection failed: {}", e))?;
 
         let (tx, rx) = mpsc::channel::<WriteRequest>();
@@ -44,34 +44,23 @@ impl WriteSerializer {
 
     pub fn submit(&self, sql: &str) -> Result<(), String> {
         let (result_tx, result_rx) = mpsc::channel();
-        let req = WriteRequest {
-            sql: sql.to_string(),
-            result_tx,
-        };
-
         self.request_tx
-            .lock()
-            .unwrap()
-            .send(req)
+            .lock().unwrap()
+            .send(WriteRequest { sql: sql.to_string(), result_tx })
             .map_err(|_| "Writer thread died".to_string())?;
 
         result_rx
             .recv_timeout(Duration::from_secs(30))
-            .map_err(|_| "Write timed out after 30 seconds".to_string())?
+            .map_err(|_| "Write timed out".to_string())?
     }
 
     pub fn bulk_insert(
-        &self,
-        table: &str,
-        _columns: &[ColumnMeta],
-        data: &[ColumnData],
-        row_count: usize,
+        &self, table: &str, _columns: &[ColumnMeta],
+        data: &[ColumnData], row_count: usize,
     ) -> Result<usize, String> {
         let conn = self.writer_conn.lock().unwrap();
         let col_count = data.len();
-        if col_count == 0 || row_count == 0 {
-            return Ok(0);
-        }
+        if col_count == 0 || row_count == 0 { return Ok(0); }
 
         let mut sql = format!("INSERT INTO {} VALUES ", table);
         for r in 0..row_count {
@@ -81,46 +70,28 @@ impl WriteSerializer {
                 if c > 0 { sql.push_str(", "); }
                 let cd = &data[c];
                 let is_null = cd.null_indices.contains(&(r as i32));
-                if is_null {
-                    sql.push_str("NULL");
-                } else if r < cd.int32_values.len() {
-                    sql.push_str(&cd.int32_values[r].to_string());
-                } else if r < cd.int64_values.len() {
-                    sql.push_str(&cd.int64_values[r].to_string());
-                } else if r < cd.double_values.len() {
-                    sql.push_str(&cd.double_values[r].to_string());
-                } else if r < cd.bool_values.len() {
-                    sql.push_str(if cd.bool_values[r] { "true" } else { "false" });
-                } else if r < cd.string_values.len() {
+                if is_null { sql.push_str("NULL"); }
+                else if r < cd.int32_values.len() { sql.push_str(&cd.int32_values[r].to_string()); }
+                else if r < cd.int64_values.len() { sql.push_str(&cd.int64_values[r].to_string()); }
+                else if r < cd.double_values.len() { sql.push_str(&cd.double_values[r].to_string()); }
+                else if r < cd.bool_values.len() { sql.push_str(if cd.bool_values[r] { "true" } else { "false" }); }
+                else if r < cd.string_values.len() {
                     sql.push('\'');
                     sql.push_str(&cd.string_values[r].replace('\'', "''"));
                     sql.push('\'');
-                } else {
-                    sql.push_str("NULL");
-                }
+                } else { sql.push_str("NULL"); }
             }
             sql.push(')');
         }
 
-        conn.execute_batch(&sql)
-            .map_err(|e| format!("Bulk insert failed: {}", e))?;
-
+        conn.execute_batch(&sql).map_err(|e| format!("Bulk insert failed: {}", e))?;
         Ok(row_count)
     }
 }
 
-fn drain_loop(
-    conn: Connection,
-    rx: mpsc::Receiver<WriteRequest>,
-    batch_ms: u64,
-    batch_max: usize,
-) {
+fn drain_loop(conn: Connection, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64, batch_max: usize) {
     loop {
-        let first = match rx.recv() {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-
+        let first = match rx.recv() { Ok(r) => r, Err(_) => return };
         let mut batch = vec![first];
 
         let deadline = std::time::Instant::now() + Duration::from_millis(batch_ms);
@@ -129,50 +100,28 @@ fn drain_loop(
             if timeout.is_zero() { break; }
             match rx.recv_timeout(timeout) {
                 Ok(req) => batch.push(req),
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(_) => break,
             }
         }
-
         execute_batch(&conn, &batch);
     }
 }
 
 fn execute_batch(conn: &Connection, batch: &[WriteRequest]) {
     if conn.execute_batch("BEGIN").is_err() {
-        for req in batch {
-            let result = conn.execute_batch(&req.sql);
-            let _ = req.result_tx.send(result.map_err(|e| e.to_string()));
-        }
+        for req in batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
         return;
     }
-
     let mut all_ok = true;
-    for req in batch {
-        if conn.execute_batch(&req.sql).is_err() {
-            all_ok = false;
-            break;
-        }
-    }
-
+    for req in batch { if conn.execute_batch(&req.sql).is_err() { all_ok = false; break; } }
     if !all_ok {
         let _ = conn.execute_batch("ROLLBACK");
-        for req in batch {
-            let result = conn.execute_batch(&req.sql);
-            let _ = req.result_tx.send(result.map_err(|e| e.to_string()));
-        }
+        for req in batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
         return;
     }
-
     if conn.execute_batch("COMMIT").is_err() {
-        for req in batch {
-            let result = conn.execute_batch(&req.sql);
-            let _ = req.result_tx.send(result.map_err(|e| e.to_string()));
-        }
+        for req in batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
         return;
     }
-
-    for req in batch {
-        let _ = req.result_tx.send(Ok(()));
-    }
+    for req in batch { let _ = req.result_tx.send(Ok(())); }
 }

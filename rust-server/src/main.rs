@@ -348,7 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = Arc::new(ConnectionPool::new(&db_path, readers)?);
 
     // Create write serializer
-    let writer = Arc::new(WriteSerializer::new(pool.database(), args.batch_ms, args.batch_max)?);
+    let writer = Arc::new(WriteSerializer::new(&db_path, args.batch_ms, args.batch_max)?);
 
     // Apply DuckDB performance tuning on one connection
     {
