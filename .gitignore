@@ -2,6 +2,14 @@
 build/
 bin/
 obj/
+cpp/bin/
+cpp/obj/
+cpp/generated/
+DuckFlightServerCpp/
+*.obj
+*.pdb
+*.ilk
+*.idb
 
 # NuGet packages (restored via nuget restore)
 packages/
