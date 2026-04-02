@@ -1,87 +1,26 @@
-//! Thread-safe DuckDB connection pool.
+//! DuckDB connection pool using r2d2.
 //!
-//! Uses a single shared Connection behind Arc<Mutex> with a semaphore.
-//! DuckDB handles concurrent reads internally on the same connection.
+//! Opens the database ONCE, creates N connections via try_clone() internally.
+//! Each connection can run queries independently — true concurrent reads.
 
-use duckdb::Connection;
-use std::sync::{Arc, Mutex, Condvar};
-use std::time::Duration;
+use duckdb::r2d2::DuckdbConnectionManager;
+use r2d2::{Pool, PooledConnection};
 
-pub struct Handle {
-    conn: Arc<Mutex<Connection>>,
-    done_signal: Arc<(Mutex<usize>, Condvar)>,
-}
+pub type DuckDbPool = Pool<DuckdbConnectionManager>;
+pub type DuckDbConn = PooledConnection<DuckdbConnectionManager>;
 
-impl Handle {
-    pub fn execute_query(&self, sql: &str) -> Result<Vec<Vec<Option<String>>>, String> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-        let col_count = stmt.column_count();
-        let rows = stmt.query_map([], |row| {
-            let mut values = Vec::with_capacity(col_count);
-            for i in 0..col_count {
-                values.push(row.get::<_, Option<String>>(i).unwrap_or(None));
-            }
-            Ok(values)
-        }).map_err(|e| e.to_string())?;
-        let mut result = Vec::new();
-        for row in rows { result.push(row.map_err(|e| e.to_string())?); }
-        Ok(result)
-    }
+/// Create an r2d2 connection pool for DuckDB.
+pub fn create_pool(db_path: &str, size: usize) -> Result<DuckDbPool, String> {
+    let manager = if db_path == ":memory:" {
+        DuckdbConnectionManager::memory()
+            .map_err(|e| format!("Failed to create memory manager: {}", e))?
+    } else {
+        DuckdbConnectionManager::file(db_path)
+            .map_err(|e| format!("Failed to create file manager: {}", e))?
+    };
 
-    pub fn column_names(&self, sql: &str) -> Result<Vec<String>, String> {
-        let conn = self.conn.lock().unwrap();
-        let stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-        Ok(stmt.column_names().iter().map(|s| s.to_string()).collect())
-    }
-
-    pub fn execute_batch(&self, sql: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(sql).map_err(|e| e.to_string())
-    }
-}
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        let (lock, cvar) = &*self.done_signal;
-        let mut count = lock.lock().unwrap();
-        *count += 1;
-        cvar.notify_all();
-    }
-}
-
-pub struct ConnectionPool {
-    conn: Arc<Mutex<Connection>>,
-    available: Arc<(Mutex<usize>, Condvar)>,
-    size: usize,
-}
-
-impl ConnectionPool {
-    pub fn from_shared(conn: Arc<Mutex<Connection>>, size: usize) -> Self {
-        Self {
-            conn,
-            available: Arc::new((Mutex::new(size), Condvar::new())),
-            size,
-        }
-    }
-
-    pub fn borrow(&self) -> Result<Handle, String> {
-        let (lock, cvar) = &*self.available;
-        let mut available = lock.lock().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while *available == 0 {
-            let timeout = deadline.saturating_duration_since(std::time::Instant::now());
-            if timeout.is_zero() {
-                return Err(format!("Pool timed out (size={})", self.size));
-            }
-            available = cvar.wait_timeout(available, timeout).unwrap().0;
-        }
-        *available -= 1;
-        Ok(Handle {
-            conn: self.conn.clone(),
-            done_signal: self.available.clone(),
-        })
-    }
-
-    pub fn size(&self) -> usize { self.size }
+    Pool::builder()
+        .max_size(size as u32)
+        .build(manager)
+        .map_err(|e| format!("Failed to build pool: {}", e))
 }
