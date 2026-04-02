@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM  Build gRPC + Protobuf from source using VS2022
+REM  Build gRPC + Protobuf from source using VS2017
 REM
 REM  This script:
 REM    1. Clones gRPC v1.49.0 (last version with C++14/VS2017 ABI compat)
@@ -9,7 +9,7 @@ REM    3. Installs to C:\grpc-install (headers, libs, tools)
 REM    4. The VS2017 .vcxproj references C:\grpc-install
 REM
 REM  Prerequisites:
-REM    - Visual Studio 2022 with C++ workload
+REM    - Visual Studio 2017 with C++ workload
 REM    - CMake on PATH
 REM    - Git on PATH
 REM
@@ -27,7 +27,7 @@ REM ============================================================================
 set GRPC_VERSION=v1.35.0
 set GRPC_SRC=C:\grpc-src
 set GRPC_INSTALL=C:\grpc-install
-set GRPC_BUILD=%GRPC_SRC%\build
+set GRPC_BUILD=C:\grpc-build
 
 echo.
 echo  ============================================
@@ -57,7 +57,7 @@ echo [2/5] Configuring CMake with VS2022...
 if not exist "%GRPC_BUILD%" mkdir "%GRPC_BUILD%"
 
 cmake -B "%GRPC_BUILD%" -S "%GRPC_SRC%" ^
-    -G "Visual Studio 17 2022" -A x64 ^
+    -G "Visual Studio 15 2017" -A x64 ^
     -DCMAKE_INSTALL_PREFIX="%GRPC_INSTALL%" ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DgRPC_INSTALL=ON ^
