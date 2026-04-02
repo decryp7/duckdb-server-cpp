@@ -114,6 +114,7 @@ int main(int argc, char* argv[]) {
         else if (a == "--readers")   cfg.reader_pool_size = parse_pos(val, "--readers");
         else if (a == "--batch-ms")  cfg.write_batch_ms   = parse_int(val, "--batch-ms");
         else if (a == "--batch-max") cfg.write_batch_max  = parse_pos(val, "--batch-max");
+        else if (a == "--shards")    cfg.shards           = parse_int(val, "--shards");
         else if (a == "--tls-cert")  cfg.tls_cert_path    = val;
         else if (a == "--tls-key")   cfg.tls_key_path     = val;
         else { std::cerr << "Unknown option: " << a << "\n"; usage(argv[0]); return 1; }

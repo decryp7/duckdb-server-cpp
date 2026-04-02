@@ -22,56 +22,93 @@ namespace das {
 
 // ─── Construction / destruction ──────────────────────────────────────────────
 
+static std::string shard_path(const std::string& base, int idx, int count) {
+    if (count <= 1) return base;
+    if (base.empty() || base == ":memory:") return "";
+    auto dot = base.rfind('.');
+    if (dot != std::string::npos)
+        return base.substr(0, dot) + "_" + std::to_string(idx) + base.substr(dot);
+    return base + "_" + std::to_string(idx);
+}
+
 DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
-    : cfg_(cfg), db_(nullptr), writer_conn_(nullptr)
+    : cfg_(cfg)
 {
     stat_queries_read_.store(0);
     stat_queries_write_.store(0);
     stat_errors_.store(0);
+    next_read_shard_.store(0);
 
     if (cfg_.reader_pool_size == 0) {
         unsigned hw = std::thread::hardware_concurrency();
         cfg_.reader_pool_size = (hw > 0 ? hw : 4) * 2;
     }
 
-    auto cleanup = [this]() noexcept {
-        writer_.reset(); read_pool_.reset();
-        if (writer_conn_) { duckdb_disconnect(&writer_conn_); writer_conn_ = nullptr; }
-        if (db_) { duckdb_close(&db_); db_ = nullptr; }
-    };
+    int shard_count = std::max(1, cfg_.shards);
+    size_t readers_per_shard = std::max<size_t>(1, cfg_.reader_pool_size / shard_count);
 
-    try {
-        const bool is_memory = cfg_.db_path.empty() || cfg_.db_path == ":memory:";
-        const char* path = is_memory ? nullptr : cfg_.db_path.c_str();
-        if (duckdb_open(path, &db_) == DuckDBError)
-            throw std::runtime_error("Cannot open database: " + cfg_.db_path);
-        read_pool_ = std::unique_ptr<ConnectionPool>(new ConnectionPool(db_, cfg_.reader_pool_size));
-        if (duckdb_connect(db_, &writer_conn_) == DuckDBError)
-            throw std::runtime_error("Cannot create writer connection");
-        writer_ = std::unique_ptr<IWriteSerializer>(
-            new WriteSerializer(writer_conn_, cfg_.write_batch_ms, cfg_.write_batch_max));
+    for (int i = 0; i < shard_count; ++i) {
+        auto s = std::unique_ptr<Shard>(new Shard());
+        s->db = nullptr;
+        s->writer_conn = nullptr;
 
-        // DuckDB performance tuning
-        duckdb_query(writer_conn_, "PRAGMA enable_object_cache", nullptr);
-        duckdb_query(writer_conn_, "SET preserve_insertion_order=false", nullptr);
-        duckdb_query(writer_conn_, "SET checkpoint_threshold='256MB'", nullptr);
+        std::string path = shard_path(cfg_.db_path, i, shard_count);
+        const bool is_memory = path.empty() || path == ":memory:";
+        const char* cpath = is_memory ? nullptr : path.c_str();
 
-    } catch (...) { cleanup(); throw; }
+        if (duckdb_open(cpath, &s->db) == DuckDBError)
+            throw std::runtime_error("Cannot open shard " + std::to_string(i));
 
-    std::cout << "[das] DuckGrpcServer initialised (streaming + chunk API + memcpy)\n"
-              << "      db       = " << cfg_.db_path << "\n"
-              << "      readers  = " << cfg_.reader_pool_size << "\n";
+        s->pool = std::unique_ptr<ConnectionPool>(new ConnectionPool(s->db, readers_per_shard));
+
+        if (duckdb_connect(s->db, &s->writer_conn) == DuckDBError)
+            throw std::runtime_error("Cannot create writer for shard " + std::to_string(i));
+
+        s->writer = std::unique_ptr<IWriteSerializer>(
+            new WriteSerializer(s->writer_conn, cfg_.write_batch_ms, cfg_.write_batch_max));
+
+        // Per-shard DuckDB tuning
+        duckdb_query(s->writer_conn, "SET threads=1", nullptr);
+        duckdb_query(s->writer_conn, "PRAGMA enable_object_cache", nullptr);
+        duckdb_query(s->writer_conn, "SET preserve_insertion_order=false", nullptr);
+        duckdb_query(s->writer_conn, "SET checkpoint_threshold='256MB'", nullptr);
+
+        shards_.push_back(std::move(s));
+    }
+
+    std::cout << "[das] DuckGrpcServer (sharded, read-all / write-all)\n"
+              << "      shards   = " << shard_count << "\n"
+              << "      readers  = " << readers_per_shard << " per shard, "
+              << readers_per_shard * shard_count << " total\n"
+              << "      db       = " << cfg_.db_path << "\n";
 }
 
 DuckGrpcServer::~DuckGrpcServer() {
-    writer_.reset(); read_pool_.reset();
-    if (writer_conn_) duckdb_disconnect(&writer_conn_);
-    if (db_) duckdb_close(&db_);
+    shards_.clear(); // Shard destructor handles cleanup
+}
+
+Shard& DuckGrpcServer::next_for_read() {
+    size_t idx = next_read_shard_.fetch_add(1, std::memory_order_relaxed);
+    return *shards_[idx % shards_.size()];
+}
+
+WriteResult DuckGrpcServer::write_to_all(const std::string& sql) {
+    if (shards_.size() == 1)
+        return shards_[0]->writer->submit(sql);
+
+    // Fan-out: submit to all shards (serial for simplicity; could use threads)
+    for (auto& s : shards_) {
+        WriteResult wr = s->writer->submit(sql);
+        if (!wr.ok) return wr;
+    }
+    return WriteResult{true, ""};
 }
 
 ServerStats DuckGrpcServer::stats() const {
+    size_t total_pool = 0;
+    for (auto& s : shards_) total_pool += s->pool->size();
     return { stat_queries_read_.load(), stat_queries_write_.load(),
-             stat_errors_.load(), cfg_.reader_pool_size, cfg_.port };
+             stat_errors_.load(), total_pool, cfg_.port };
 }
 
 // ─── Column type mapping ─────────────────────────────────────────────────────
@@ -278,7 +315,8 @@ grpc::Status DuckGrpcServer::Query(
     grpc::ServerWriter<duckdb::v1::QueryResponse>* writer)
 {
     try {
-        auto handle = read_pool_->borrow();
+        auto& shard = next_for_read();
+        auto handle = shard.pool->borrow();
 
         // Execute query (materialized — simpler and more compatible than streaming)
         duckdb_result result;
@@ -373,7 +411,7 @@ grpc::Status DuckGrpcServer::Execute(
         response->set_error("SQL required");
         return grpc::Status::OK;
     }
-    const WriteResult wr = writer_->submit(request->sql());
+    const WriteResult wr = write_to_all(request->sql());
     if (!wr.ok) {
         stat_errors_.fetch_add(1);
         response->set_success(false);

@@ -9,12 +9,13 @@
 //!   6. Appender API — bulk inserts bypass SQL parser (10-100x writes)
 
 mod pool;
+mod shard;
 mod writer;
 
 use clap::Parser;
 use duckdb::arrow::array::*;
 use duckdb::arrow::datatypes::DataType;
-use pool::ConnectionPool;
+use shard::ShardedDuckDb;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +40,8 @@ struct Args {
     port: u16,
     #[arg(long, default_value_t = 0)]
     readers: usize,
+    #[arg(long, default_value_t = 1)]
+    shards: usize,
     #[arg(long, default_value_t = 5)]
     batch_ms: u64,
     #[arg(long, default_value_t = 512)]
@@ -48,8 +51,7 @@ struct Args {
 }
 
 struct DuckDbServerImpl {
-    pool: Arc<ConnectionPool>,
-    writer: Arc<WriteSerializer>,
+    sharded_db: Arc<ShardedDuckDb>,
     batch_size: usize,
     port: u16,
     stat_reads: Arc<AtomicI64>,
@@ -63,7 +65,7 @@ impl DuckDbService for DuckDbServerImpl {
 
     async fn query(&self, request: Request<QueryRequest>) -> Result<Response<Self::QueryStream>, Status> {
         let sql = request.into_inner().sql;
-        let pool = self.pool.clone();
+        let sharded = self.sharded_db.clone();
         let _batch_size = self.batch_size;
         let stat_reads = self.stat_reads.clone();
         let stat_errors = self.stat_errors.clone();
@@ -72,7 +74,9 @@ impl DuckDbService for DuckDbServerImpl {
         let (tx, rx) = tokio::sync::mpsc::channel(32);
 
         tokio::task::spawn_blocking(move || {
-            let conn = match pool.borrow() {
+            // Read: round-robin across shards
+            let shard = sharded.next_for_read();
+            let conn = match shard.pool.borrow() {
                 Ok(c) => c,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
@@ -153,7 +157,8 @@ impl DuckDbService for DuckDbServerImpl {
             self.stat_errors.fetch_add(1, Ordering::Relaxed);
             return Ok(Response::new(ExecuteResponse { success: false, error: "SQL required".into() }));
         }
-        match self.writer.submit(&sql) {
+        // Write: fan-out to ALL shards
+        match self.sharded_db.write_to_all(&sql) {
             Ok(()) => {
                 self.stat_writes.fetch_add(1, Ordering::Relaxed);
                 Ok(Response::new(ExecuteResponse { success: true, error: String::new() }))
@@ -167,9 +172,10 @@ impl DuckDbService for DuckDbServerImpl {
 
     async fn bulk_insert(&self, request: Request<BulkInsertRequest>) -> Result<Response<BulkInsertResponse>, Status> {
         let req = request.into_inner();
-        let writer = self.writer.clone();
+        // BulkInsert: use first shard's writer (fan-out not practical for bulk)
+        let shard_writer = self.sharded_db.next_for_read().writer.clone();
         let result = tokio::task::spawn_blocking(move || {
-            writer.bulk_insert(&req.table, &req.columns, &req.data, req.row_count as usize)
+            shard_writer.bulk_insert(&req.table, &req.columns, &req.data, req.row_count as usize)
         }).await.map_err(|e| Status::internal(e.to_string()))?;
         match result {
             Ok(count) => {
@@ -192,7 +198,7 @@ impl DuckDbService for DuckDbServerImpl {
             queries_read: self.stat_reads.load(Ordering::Relaxed),
             queries_write: self.stat_writes.load(Ordering::Relaxed),
             errors: self.stat_errors.load(Ordering::Relaxed),
-            reader_pool_size: self.pool.size() as i32,
+            reader_pool_size: self.sharded_db.total_pool_size() as i32,
             port: self.port as i32,
         }))
     }
@@ -308,26 +314,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let readers = if args.readers == 0 { num_cpus::get() * 2 } else { args.readers };
 
-    let pool = Arc::new(ConnectionPool::new(&args.db, readers)?);
+    let shard_count = std::cmp::max(1, args.shards);
+    let readers_per_shard = std::cmp::max(1, readers / shard_count);
 
-    // Optimization 2: SET threads=1 — each connection runs single-threaded,
-    // pool provides parallelism. Eliminates internal DuckDB thread contention.
-    {
-        let conn = pool.borrow().map_err(|e| e)?;
-        let _ = conn.execute_batch("SET threads=1");
-        let _ = conn.execute_batch("PRAGMA enable_object_cache");
-        let _ = conn.execute_batch("SET preserve_insertion_order=false");
-        let _ = conn.execute_batch("SET checkpoint_threshold='256MB'");
-    }
-
-    let writer = {
-        let conn = pool.borrow().map_err(|e| e)?;
-        Arc::new(WriteSerializer::from_conn(&conn, args.batch_ms, args.batch_max)?)
-    };
+    let sharded_db = Arc::new(ShardedDuckDb::new(
+        &args.db, shard_count, readers_per_shard,
+        args.batch_ms, args.batch_max,
+    )?);
 
     let server_impl = DuckDbServerImpl {
-        pool: pool.clone(),
-        writer,
+        sharded_db: sharded_db.clone(),
         batch_size: args.batch_size,
         port: args.port,
         stat_reads: Arc::new(AtomicI64::new(0)),
@@ -337,12 +333,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = format!("{}:{}", args.host, args.port).parse()?;
 
-    println!("[das] DuckDB gRPC Server v5.0.0 (Rust — max performance)");
+    println!("[das] DuckDB gRPC Server v5.0.0 (Rust — sharded)");
     println!("      address  = {}", addr);
-    println!("      readers  = {} (threads=1 per connection)", readers);
+    println!("      shards   = {} (read-all / write-all)", shard_count);
+    println!("      readers  = {} per shard, {} total", readers_per_shard, sharded_db.total_pool_size());
     println!("      db       = {}", args.db);
-    println!("      optimizations: query_arrow, prepare_cached, threads=1,");
-    println!("                     http2 2MB window, channel buf 32");
 
     // Optimization 3: HTTP/2 window sizes for high-throughput streaming
     Server::builder()
