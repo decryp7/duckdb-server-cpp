@@ -137,16 +137,7 @@ impl DuckDbService for DuckDbServerImpl {
             let mut rows_in_batch = 0;
             let mut first_batch = true;
 
-            for row_result in rows {
-                let row = match row_result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        stat_errors.fetch_add(1, Ordering::Relaxed);
-                        let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
-                        return;
-                    }
-                };
-
+            for row in rows {
                 for c in 0..col_count {
                     if c < row.len() { row_buf[c].push(row[c].clone()); }
                     else { row_buf[c].push(None); }
