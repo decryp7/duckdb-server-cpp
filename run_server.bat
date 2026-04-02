@@ -49,7 +49,7 @@ echo  ========================================
 echo  Optimized for 100+ concurrent readers/writers
 echo.
 
-server\bin\Debug\DuckDbServer.exe ^
+server\bin\Release\DuckDbServer.exe ^
     --db data.duckdb ^
     --port 17777 ^
     --readers 128 ^

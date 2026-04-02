@@ -37,4 +37,4 @@ echo  DuckDB gRPC Server — Performance Benchmark
 echo  =============================================
 echo.
 
-benchmark\bin\Debug\DuckDbBenchmark.exe %*
+benchmark\bin\Release\DuckDbBenchmark.exe %*

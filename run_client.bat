@@ -25,4 +25,4 @@ echo  DuckDB gRPC Client Examples
 echo  ============================
 echo.
 
-client\bin\Debug\DuckDbClient.exe %*
+client\bin\Release\DuckDbClient.exe %*
