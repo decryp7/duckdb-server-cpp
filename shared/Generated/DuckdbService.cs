@@ -27,30 +27,41 @@ namespace DuckDbProto {
             "ChRkdWNrZGJfc2VydmljZS5wcm90bxIJZHVja2RiLnYxIhsKDFF1ZXJ5UmVx",
             "dWVzdBILCgNzcWwYASABKAkiVQoNUXVlcnlSZXNwb25zZRImCgdjb2x1bW5z",
             "GAEgAygLMhUuZHVja2RiLnYxLkNvbHVtbkluZm8SHAoEcm93cxgCIAMoCzIO",
-            "LmR1Y2tkYi52MS5Sb3ciKAoKQ29sdW1uSW5mbxIMCgRuYW1lGAEgASgJEgwK",
-            "BHR5cGUYAiABKAkiJwoDUm93EiAKBnZhbHVlcxgBIAMoCzIQLmR1Y2tkYi52",
-            "MS5WYWx1ZSImCgVWYWx1ZRIMCgR0ZXh0GAEgASgJEg8KB2lzX251bGwYAiAB",
-            "KAgiHQoORXhlY3V0ZVJlcXVlc3QSCwoDc3FsGAEgASgJIjEKD0V4ZWN1dGVS",
-            "ZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIg0KC1Bp",
-            "bmdSZXF1ZXN0Ih8KDFBpbmdSZXNwb25zZRIPCgdtZXNzYWdlGAEgASgJIg4K",
-            "DFN0YXRzUmVxdWVzdCJ0Cg1TdGF0c1Jlc3BvbnNlEhQKDHF1ZXJpZXNfcmVh",
-            "ZBgBIAEoAxIVCg1xdWVyaWVzX3dyaXRlGAIgASgDEg4KBmVycm9ycxgDIAEo",
-            "AxIYChByZWFkZXJfcG9vbF9zaXplGAQgASgFEgwKBHBvcnQYBSABKAUyhwIK",
-            "DUR1Y2tEYlNlcnZpY2USPAoFUXVlcnkSFy5kdWNrZGIudjEuUXVlcnlSZXF1",
-            "ZXN0GhguZHVja2RiLnYxLlF1ZXJ5UmVzcG9uc2UwARJACgdFeGVjdXRlEhku",
-            "ZHVja2RiLnYxLkV4ZWN1dGVSZXF1ZXN0GhouZHVja2RiLnYxLkV4ZWN1dGVS",
-            "ZXNwb25zZRI3CgRQaW5nEhYuZHVja2RiLnYxLlBpbmdSZXF1ZXN0GhcuZHVj",
-            "a2RiLnYxLlBpbmdSZXNwb25zZRI9CghHZXRTdGF0cxIXLmR1Y2tkYi52MS5T",
-            "dGF0c1JlcXVlc3QaGC5kdWNrZGIudjEuU3RhdHNSZXNwb25zZUIOqgILRHVj",
-            "a0RiUHJvdG9iBnByb3RvMw=="));
+            "LmR1Y2tkYi52MS5Sb3ciPwoKQ29sdW1uSW5mbxIMCgRuYW1lGAEgASgJEiMK",
+            "BHR5cGUYAiABKA4yFS5kdWNrZGIudjEuQ29sdW1uVHlwZSIsCgNSb3cSJQoG",
+            "dmFsdWVzGAEgAygLMhUuZHVja2RiLnYxLlR5cGVkVmFsdWUisQEKClR5cGVk",
+            "VmFsdWUSEQoHaXNfbnVsbBgBIAEoCEgAEhQKCmJvb2xfdmFsdWUYAiABKAhI",
+            "ABIVCgtpbnQzMl92YWx1ZRgDIAEoBUgAEhUKC2ludDY0X3ZhbHVlGAQgASgD",
+            "SAASFgoMZG91YmxlX3ZhbHVlGAUgASgBSAASFgoMc3RyaW5nX3ZhbHVlGAYg",
+            "ASgJSAASFAoKYmxvYl92YWx1ZRgHIAEoDEgAQgYKBGtpbmQiHQoORXhlY3V0",
+            "ZVJlcXVlc3QSCwoDc3FsGAEgASgJIjEKD0V4ZWN1dGVSZXNwb25zZRIPCgdz",
+            "dWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIg0KC1BpbmdSZXF1ZXN0Ih8K",
+            "DFBpbmdSZXNwb25zZRIPCgdtZXNzYWdlGAEgASgJIg4KDFN0YXRzUmVxdWVz",
+            "dCJ0Cg1TdGF0c1Jlc3BvbnNlEhQKDHF1ZXJpZXNfcmVhZBgBIAEoAxIVCg1x",
+            "dWVyaWVzX3dyaXRlGAIgASgDEg4KBmVycm9ycxgDIAEoAxIYChByZWFkZXJf",
+            "cG9vbF9zaXplGAQgASgFEgwKBHBvcnQYBSABKAUqtwIKCkNvbHVtblR5cGUS",
+            "EAoMVFlQRV9VTktOT1dOEAASEAoMVFlQRV9CT09MRUFOEAESDgoKVFlQRV9J",
+            "TlQzMhACEg4KClRZUEVfSU5UNjQQAxIOCgpUWVBFX0ZMT0FUEAQSDwoLVFlQ",
+            "RV9ET1VCTEUQBRIPCgtUWVBFX1NUUklORxAGEg0KCVRZUEVfQkxPQhAHEhIK",
+            "DlRZUEVfVElNRVNUQU1QEAgSDQoJVFlQRV9EQVRFEAkSDQoJVFlQRV9USU1F",
+            "EAoSEAoMVFlQRV9ERUNJTUFMEAsSDQoJVFlQRV9JTlQ4EAwSDgoKVFlQRV9J",
+            "TlQxNhANEg4KClRZUEVfVUlOVDgQDhIPCgtUWVBFX1VJTlQxNhAPEg8KC1RZ",
+            "UEVfVUlOVDMyEBASDwoLVFlQRV9VSU5UNjQQETKHAgoNRHVja0RiU2Vydmlj",
+            "ZRI8CgVRdWVyeRIXLmR1Y2tkYi52MS5RdWVyeVJlcXVlc3QaGC5kdWNrZGIu",
+            "djEuUXVlcnlSZXNwb25zZTABEkAKB0V4ZWN1dGUSGS5kdWNrZGIudjEuRXhl",
+            "Y3V0ZVJlcXVlc3QaGi5kdWNrZGIudjEuRXhlY3V0ZVJlc3BvbnNlEjcKBFBp",
+            "bmcSFi5kdWNrZGIudjEuUGluZ1JlcXVlc3QaFy5kdWNrZGIudjEuUGluZ1Jl",
+            "c3BvbnNlEj0KCEdldFN0YXRzEhcuZHVja2RiLnYxLlN0YXRzUmVxdWVzdBoY",
+            "LmR1Y2tkYi52MS5TdGF0c1Jlc3BvbnNlQg6qAgtEdWNrRGJQcm90b2IGcHJv",
+            "dG8z"));
       descriptor = pbr::FileDescriptor.FromGeneratedCode(descriptorData,
           new pbr::FileDescriptor[] { },
-          new pbr::GeneratedClrTypeInfo(null, null, new pbr::GeneratedClrTypeInfo[] {
+          new pbr::GeneratedClrTypeInfo(new[] {typeof(global::DuckDbProto.ColumnType), }, null, new pbr::GeneratedClrTypeInfo[] {
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.QueryRequest), global::DuckDbProto.QueryRequest.Parser, new[]{ "Sql" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.QueryResponse), global::DuckDbProto.QueryResponse.Parser, new[]{ "Columns", "Rows" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.ColumnInfo), global::DuckDbProto.ColumnInfo.Parser, new[]{ "Name", "Type" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.Row), global::DuckDbProto.Row.Parser, new[]{ "Values" }, null, null, null, null),
-            new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.Value), global::DuckDbProto.Value.Parser, new[]{ "Text", "IsNull" }, null, null, null, null),
+            new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.TypedValue), global::DuckDbProto.TypedValue.Parser, new[]{ "IsNull", "BoolValue", "Int32Value", "Int64Value", "DoubleValue", "StringValue", "BlobValue" }, new[]{ "Kind" }, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.ExecuteRequest), global::DuckDbProto.ExecuteRequest.Parser, new[]{ "Sql" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.ExecuteResponse), global::DuckDbProto.ExecuteResponse.Parser, new[]{ "Success", "Error" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.PingRequest), global::DuckDbProto.PingRequest.Parser, null, null, null, null, null),
@@ -62,6 +73,30 @@ namespace DuckDbProto {
     #endregion
 
   }
+  #region Enums
+  public enum ColumnType {
+    [pbr::OriginalName("TYPE_UNKNOWN")] TypeUnknown = 0,
+    [pbr::OriginalName("TYPE_BOOLEAN")] TypeBoolean = 1,
+    [pbr::OriginalName("TYPE_INT32")] TypeInt32 = 2,
+    [pbr::OriginalName("TYPE_INT64")] TypeInt64 = 3,
+    [pbr::OriginalName("TYPE_FLOAT")] TypeFloat = 4,
+    [pbr::OriginalName("TYPE_DOUBLE")] TypeDouble = 5,
+    [pbr::OriginalName("TYPE_STRING")] TypeString = 6,
+    [pbr::OriginalName("TYPE_BLOB")] TypeBlob = 7,
+    [pbr::OriginalName("TYPE_TIMESTAMP")] TypeTimestamp = 8,
+    [pbr::OriginalName("TYPE_DATE")] TypeDate = 9,
+    [pbr::OriginalName("TYPE_TIME")] TypeTime = 10,
+    [pbr::OriginalName("TYPE_DECIMAL")] TypeDecimal = 11,
+    [pbr::OriginalName("TYPE_INT8")] TypeInt8 = 12,
+    [pbr::OriginalName("TYPE_INT16")] TypeInt16 = 13,
+    [pbr::OriginalName("TYPE_UINT8")] TypeUint8 = 14,
+    [pbr::OriginalName("TYPE_UINT16")] TypeUint16 = 15,
+    [pbr::OriginalName("TYPE_UINT32")] TypeUint32 = 16,
+    [pbr::OriginalName("TYPE_UINT64")] TypeUint64 = 17,
+  }
+
+  #endregion
+
   #region Messages
   public sealed partial class QueryRequest : pb::IMessage<QueryRequest>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
@@ -303,7 +338,7 @@ namespace DuckDbProto {
         = pb::FieldCodec.ForMessage(10, global::DuckDbProto.ColumnInfo.Parser);
     private readonly pbc::RepeatedField<global::DuckDbProto.ColumnInfo> columns_ = new pbc::RepeatedField<global::DuckDbProto.ColumnInfo>();
     /// <summary>
-    /// Column metadata (sent in the first response only).
+    /// First message only
     /// </summary>
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
@@ -317,7 +352,7 @@ namespace DuckDbProto {
         = pb::FieldCodec.ForMessage(18, global::DuckDbProto.Row.Parser);
     private readonly pbc::RepeatedField<global::DuckDbProto.Row> rows_ = new pbc::RepeatedField<global::DuckDbProto.Row>();
     /// <summary>
-    /// Row data (sent in subsequent responses, batched for efficiency).
+    /// Subsequent messages
     /// </summary>
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
@@ -462,9 +497,6 @@ namespace DuckDbProto {
 
   }
 
-  /// <summary>
-  /// Column metadata describing one column in the result set.
-  /// </summary>
   public sealed partial class ColumnInfo : pb::IMessage<ColumnInfo>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
       , pb::IBufferMessage
@@ -524,16 +556,13 @@ namespace DuckDbProto {
 
     /// <summary>Field number for the "type" field.</summary>
     public const int TypeFieldNumber = 2;
-    private string type_ = "";
-    /// <summary>
-    /// DuckDB type name: INTEGER, VARCHAR, DOUBLE, BOOLEAN, etc.
-    /// </summary>
+    private global::DuckDbProto.ColumnType type_ = global::DuckDbProto.ColumnType.TypeUnknown;
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public string Type {
+    public global::DuckDbProto.ColumnType Type {
       get { return type_; }
       set {
-        type_ = pb::ProtoPreconditions.CheckNotNull(value, "value");
+        type_ = value;
       }
     }
 
@@ -562,7 +591,7 @@ namespace DuckDbProto {
     public override int GetHashCode() {
       int hash = 1;
       if (Name.Length != 0) hash ^= Name.GetHashCode();
-      if (Type.Length != 0) hash ^= Type.GetHashCode();
+      if (Type != global::DuckDbProto.ColumnType.TypeUnknown) hash ^= Type.GetHashCode();
       if (_unknownFields != null) {
         hash ^= _unknownFields.GetHashCode();
       }
@@ -585,9 +614,9 @@ namespace DuckDbProto {
         output.WriteRawTag(10);
         output.WriteString(Name);
       }
-      if (Type.Length != 0) {
-        output.WriteRawTag(18);
-        output.WriteString(Type);
+      if (Type != global::DuckDbProto.ColumnType.TypeUnknown) {
+        output.WriteRawTag(16);
+        output.WriteEnum((int) Type);
       }
       if (_unknownFields != null) {
         _unknownFields.WriteTo(output);
@@ -603,9 +632,9 @@ namespace DuckDbProto {
         output.WriteRawTag(10);
         output.WriteString(Name);
       }
-      if (Type.Length != 0) {
-        output.WriteRawTag(18);
-        output.WriteString(Type);
+      if (Type != global::DuckDbProto.ColumnType.TypeUnknown) {
+        output.WriteRawTag(16);
+        output.WriteEnum((int) Type);
       }
       if (_unknownFields != null) {
         _unknownFields.WriteTo(ref output);
@@ -620,8 +649,8 @@ namespace DuckDbProto {
       if (Name.Length != 0) {
         size += 1 + pb::CodedOutputStream.ComputeStringSize(Name);
       }
-      if (Type.Length != 0) {
-        size += 1 + pb::CodedOutputStream.ComputeStringSize(Type);
+      if (Type != global::DuckDbProto.ColumnType.TypeUnknown) {
+        size += 1 + pb::CodedOutputStream.ComputeEnumSize((int) Type);
       }
       if (_unknownFields != null) {
         size += _unknownFields.CalculateSize();
@@ -638,7 +667,7 @@ namespace DuckDbProto {
       if (other.Name.Length != 0) {
         Name = other.Name;
       }
-      if (other.Type.Length != 0) {
+      if (other.Type != global::DuckDbProto.ColumnType.TypeUnknown) {
         Type = other.Type;
       }
       _unknownFields = pb::UnknownFieldSet.MergeFrom(_unknownFields, other._unknownFields);
@@ -660,8 +689,8 @@ namespace DuckDbProto {
             Name = input.ReadString();
             break;
           }
-          case 18: {
-            Type = input.ReadString();
+          case 16: {
+            Type = (global::DuckDbProto.ColumnType) input.ReadEnum();
             break;
           }
         }
@@ -683,8 +712,8 @@ namespace DuckDbProto {
             Name = input.ReadString();
             break;
           }
-          case 18: {
-            Type = input.ReadString();
+          case 16: {
+            Type = (global::DuckDbProto.ColumnType) input.ReadEnum();
             break;
           }
         }
@@ -695,8 +724,7 @@ namespace DuckDbProto {
   }
 
   /// <summary>
-  /// A single row of data. Values are encoded as strings for simplicity.
-  /// NULL values have is_null = true.
+  /// A row of typed values. Using oneof avoids ToString/Parse overhead.
   /// </summary>
   public sealed partial class Row : pb::IMessage<Row>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
@@ -744,12 +772,12 @@ namespace DuckDbProto {
 
     /// <summary>Field number for the "values" field.</summary>
     public const int ValuesFieldNumber = 1;
-    private static readonly pb::FieldCodec<global::DuckDbProto.Value> _repeated_values_codec
-        = pb::FieldCodec.ForMessage(10, global::DuckDbProto.Value.Parser);
-    private readonly pbc::RepeatedField<global::DuckDbProto.Value> values_ = new pbc::RepeatedField<global::DuckDbProto.Value>();
+    private static readonly pb::FieldCodec<global::DuckDbProto.TypedValue> _repeated_values_codec
+        = pb::FieldCodec.ForMessage(10, global::DuckDbProto.TypedValue.Parser);
+    private readonly pbc::RepeatedField<global::DuckDbProto.TypedValue> values_ = new pbc::RepeatedField<global::DuckDbProto.TypedValue>();
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public pbc::RepeatedField<global::DuckDbProto.Value> Values {
+    public pbc::RepeatedField<global::DuckDbProto.TypedValue> Values {
       get { return values_; }
     }
 
@@ -876,16 +904,23 @@ namespace DuckDbProto {
 
   }
 
-  public sealed partial class Value : pb::IMessage<Value>
+  /// <summary>
+  /// A single typed value. Only one field is set based on the column type.
+  /// This is ~3x faster than encoding everything as strings because:
+  ///   - int64/double are encoded as 8 raw bytes (no formatting)
+  ///   - bool is 1 byte (not "True"/"False" string)
+  ///   - protobuf varint encoding is faster than decimal string formatting
+  /// </summary>
+  public sealed partial class TypedValue : pb::IMessage<TypedValue>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
       , pb::IBufferMessage
   #endif
   {
-    private static readonly pb::MessageParser<Value> _parser = new pb::MessageParser<Value>(() => new Value());
+    private static readonly pb::MessageParser<TypedValue> _parser = new pb::MessageParser<TypedValue>(() => new TypedValue());
     private pb::UnknownFieldSet _unknownFields;
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public static pb::MessageParser<Value> Parser { get { return _parser; } }
+    public static pb::MessageParser<TypedValue> Parser { get { return _parser; } }
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
@@ -901,7 +936,7 @@ namespace DuckDbProto {
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public Value() {
+    public TypedValue() {
       OnConstruction();
     }
 
@@ -909,65 +944,194 @@ namespace DuckDbProto {
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public Value(Value other) : this() {
-      text_ = other.text_;
-      isNull_ = other.isNull_;
+    public TypedValue(TypedValue other) : this() {
+      switch (other.KindCase) {
+        case KindOneofCase.IsNull:
+          IsNull = other.IsNull;
+          break;
+        case KindOneofCase.BoolValue:
+          BoolValue = other.BoolValue;
+          break;
+        case KindOneofCase.Int32Value:
+          Int32Value = other.Int32Value;
+          break;
+        case KindOneofCase.Int64Value:
+          Int64Value = other.Int64Value;
+          break;
+        case KindOneofCase.DoubleValue:
+          DoubleValue = other.DoubleValue;
+          break;
+        case KindOneofCase.StringValue:
+          StringValue = other.StringValue;
+          break;
+        case KindOneofCase.BlobValue:
+          BlobValue = other.BlobValue;
+          break;
+      }
+
       _unknownFields = pb::UnknownFieldSet.Clone(other._unknownFields);
     }
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public Value Clone() {
-      return new Value(this);
-    }
-
-    /// <summary>Field number for the "text" field.</summary>
-    public const int TextFieldNumber = 1;
-    private string text_ = "";
-    /// <summary>
-    /// String representation of the value.
-    /// </summary>
-    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
-    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public string Text {
-      get { return text_; }
-      set {
-        text_ = pb::ProtoPreconditions.CheckNotNull(value, "value");
-      }
+    public TypedValue Clone() {
+      return new TypedValue(this);
     }
 
     /// <summary>Field number for the "is_null" field.</summary>
-    public const int IsNullFieldNumber = 2;
-    private bool isNull_;
+    public const int IsNullFieldNumber = 1;
     /// <summary>
-    /// True if the value is NULL.
+    /// NULL value
     /// </summary>
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
     public bool IsNull {
-      get { return isNull_; }
+      get { return kindCase_ == KindOneofCase.IsNull ? (bool) kind_ : false; }
       set {
-        isNull_ = value;
+        kind_ = value;
+        kindCase_ = KindOneofCase.IsNull;
       }
+    }
+
+    /// <summary>Field number for the "bool_value" field.</summary>
+    public const int BoolValueFieldNumber = 2;
+    /// <summary>
+    /// BOOLEAN
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public bool BoolValue {
+      get { return kindCase_ == KindOneofCase.BoolValue ? (bool) kind_ : false; }
+      set {
+        kind_ = value;
+        kindCase_ = KindOneofCase.BoolValue;
+      }
+    }
+
+    /// <summary>Field number for the "int32_value" field.</summary>
+    public const int Int32ValueFieldNumber = 3;
+    /// <summary>
+    /// INTEGER, SMALLINT, TINYINT
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public int Int32Value {
+      get { return kindCase_ == KindOneofCase.Int32Value ? (int) kind_ : 0; }
+      set {
+        kind_ = value;
+        kindCase_ = KindOneofCase.Int32Value;
+      }
+    }
+
+    /// <summary>Field number for the "int64_value" field.</summary>
+    public const int Int64ValueFieldNumber = 4;
+    /// <summary>
+    /// BIGINT
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public long Int64Value {
+      get { return kindCase_ == KindOneofCase.Int64Value ? (long) kind_ : 0L; }
+      set {
+        kind_ = value;
+        kindCase_ = KindOneofCase.Int64Value;
+      }
+    }
+
+    /// <summary>Field number for the "double_value" field.</summary>
+    public const int DoubleValueFieldNumber = 5;
+    /// <summary>
+    /// DOUBLE, FLOAT, DECIMAL
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public double DoubleValue {
+      get { return kindCase_ == KindOneofCase.DoubleValue ? (double) kind_ : 0D; }
+      set {
+        kind_ = value;
+        kindCase_ = KindOneofCase.DoubleValue;
+      }
+    }
+
+    /// <summary>Field number for the "string_value" field.</summary>
+    public const int StringValueFieldNumber = 6;
+    /// <summary>
+    /// VARCHAR, TIMESTAMP, DATE, TIME, etc.
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public string StringValue {
+      get { return kindCase_ == KindOneofCase.StringValue ? (string) kind_ : ""; }
+      set {
+        kind_ = pb::ProtoPreconditions.CheckNotNull(value, "value");
+        kindCase_ = KindOneofCase.StringValue;
+      }
+    }
+
+    /// <summary>Field number for the "blob_value" field.</summary>
+    public const int BlobValueFieldNumber = 7;
+    /// <summary>
+    /// BLOB
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public pb::ByteString BlobValue {
+      get { return kindCase_ == KindOneofCase.BlobValue ? (pb::ByteString) kind_ : pb::ByteString.Empty; }
+      set {
+        kind_ = pb::ProtoPreconditions.CheckNotNull(value, "value");
+        kindCase_ = KindOneofCase.BlobValue;
+      }
+    }
+
+    private object kind_;
+    /// <summary>Enum of possible cases for the "kind" oneof.</summary>
+    public enum KindOneofCase {
+      None = 0,
+      IsNull = 1,
+      BoolValue = 2,
+      Int32Value = 3,
+      Int64Value = 4,
+      DoubleValue = 5,
+      StringValue = 6,
+      BlobValue = 7,
+    }
+    private KindOneofCase kindCase_ = KindOneofCase.None;
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public KindOneofCase KindCase {
+      get { return kindCase_; }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void ClearKind() {
+      kindCase_ = KindOneofCase.None;
+      kind_ = null;
     }
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
     public override bool Equals(object other) {
-      return Equals(other as Value);
+      return Equals(other as TypedValue);
     }
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public bool Equals(Value other) {
+    public bool Equals(TypedValue other) {
       if (ReferenceEquals(other, null)) {
         return false;
       }
       if (ReferenceEquals(other, this)) {
         return true;
       }
-      if (Text != other.Text) return false;
       if (IsNull != other.IsNull) return false;
+      if (BoolValue != other.BoolValue) return false;
+      if (Int32Value != other.Int32Value) return false;
+      if (Int64Value != other.Int64Value) return false;
+      if (!pbc::ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.Equals(DoubleValue, other.DoubleValue)) return false;
+      if (StringValue != other.StringValue) return false;
+      if (BlobValue != other.BlobValue) return false;
+      if (KindCase != other.KindCase) return false;
       return Equals(_unknownFields, other._unknownFields);
     }
 
@@ -975,8 +1139,14 @@ namespace DuckDbProto {
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
     public override int GetHashCode() {
       int hash = 1;
-      if (Text.Length != 0) hash ^= Text.GetHashCode();
-      if (IsNull != false) hash ^= IsNull.GetHashCode();
+      if (kindCase_ == KindOneofCase.IsNull) hash ^= IsNull.GetHashCode();
+      if (kindCase_ == KindOneofCase.BoolValue) hash ^= BoolValue.GetHashCode();
+      if (kindCase_ == KindOneofCase.Int32Value) hash ^= Int32Value.GetHashCode();
+      if (kindCase_ == KindOneofCase.Int64Value) hash ^= Int64Value.GetHashCode();
+      if (kindCase_ == KindOneofCase.DoubleValue) hash ^= pbc::ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.GetHashCode(DoubleValue);
+      if (kindCase_ == KindOneofCase.StringValue) hash ^= StringValue.GetHashCode();
+      if (kindCase_ == KindOneofCase.BlobValue) hash ^= BlobValue.GetHashCode();
+      hash ^= (int) kindCase_;
       if (_unknownFields != null) {
         hash ^= _unknownFields.GetHashCode();
       }
@@ -995,13 +1165,33 @@ namespace DuckDbProto {
     #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
       output.WriteRawMessage(this);
     #else
-      if (Text.Length != 0) {
-        output.WriteRawTag(10);
-        output.WriteString(Text);
-      }
-      if (IsNull != false) {
-        output.WriteRawTag(16);
+      if (kindCase_ == KindOneofCase.IsNull) {
+        output.WriteRawTag(8);
         output.WriteBool(IsNull);
+      }
+      if (kindCase_ == KindOneofCase.BoolValue) {
+        output.WriteRawTag(16);
+        output.WriteBool(BoolValue);
+      }
+      if (kindCase_ == KindOneofCase.Int32Value) {
+        output.WriteRawTag(24);
+        output.WriteInt32(Int32Value);
+      }
+      if (kindCase_ == KindOneofCase.Int64Value) {
+        output.WriteRawTag(32);
+        output.WriteInt64(Int64Value);
+      }
+      if (kindCase_ == KindOneofCase.DoubleValue) {
+        output.WriteRawTag(41);
+        output.WriteDouble(DoubleValue);
+      }
+      if (kindCase_ == KindOneofCase.StringValue) {
+        output.WriteRawTag(50);
+        output.WriteString(StringValue);
+      }
+      if (kindCase_ == KindOneofCase.BlobValue) {
+        output.WriteRawTag(58);
+        output.WriteBytes(BlobValue);
       }
       if (_unknownFields != null) {
         _unknownFields.WriteTo(output);
@@ -1013,13 +1203,33 @@ namespace DuckDbProto {
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
     void pb::IBufferMessage.InternalWriteTo(ref pb::WriteContext output) {
-      if (Text.Length != 0) {
-        output.WriteRawTag(10);
-        output.WriteString(Text);
-      }
-      if (IsNull != false) {
-        output.WriteRawTag(16);
+      if (kindCase_ == KindOneofCase.IsNull) {
+        output.WriteRawTag(8);
         output.WriteBool(IsNull);
+      }
+      if (kindCase_ == KindOneofCase.BoolValue) {
+        output.WriteRawTag(16);
+        output.WriteBool(BoolValue);
+      }
+      if (kindCase_ == KindOneofCase.Int32Value) {
+        output.WriteRawTag(24);
+        output.WriteInt32(Int32Value);
+      }
+      if (kindCase_ == KindOneofCase.Int64Value) {
+        output.WriteRawTag(32);
+        output.WriteInt64(Int64Value);
+      }
+      if (kindCase_ == KindOneofCase.DoubleValue) {
+        output.WriteRawTag(41);
+        output.WriteDouble(DoubleValue);
+      }
+      if (kindCase_ == KindOneofCase.StringValue) {
+        output.WriteRawTag(50);
+        output.WriteString(StringValue);
+      }
+      if (kindCase_ == KindOneofCase.BlobValue) {
+        output.WriteRawTag(58);
+        output.WriteBytes(BlobValue);
       }
       if (_unknownFields != null) {
         _unknownFields.WriteTo(ref output);
@@ -1031,11 +1241,26 @@ namespace DuckDbProto {
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
     public int CalculateSize() {
       int size = 0;
-      if (Text.Length != 0) {
-        size += 1 + pb::CodedOutputStream.ComputeStringSize(Text);
-      }
-      if (IsNull != false) {
+      if (kindCase_ == KindOneofCase.IsNull) {
         size += 1 + 1;
+      }
+      if (kindCase_ == KindOneofCase.BoolValue) {
+        size += 1 + 1;
+      }
+      if (kindCase_ == KindOneofCase.Int32Value) {
+        size += 1 + pb::CodedOutputStream.ComputeInt32Size(Int32Value);
+      }
+      if (kindCase_ == KindOneofCase.Int64Value) {
+        size += 1 + pb::CodedOutputStream.ComputeInt64Size(Int64Value);
+      }
+      if (kindCase_ == KindOneofCase.DoubleValue) {
+        size += 1 + 8;
+      }
+      if (kindCase_ == KindOneofCase.StringValue) {
+        size += 1 + pb::CodedOutputStream.ComputeStringSize(StringValue);
+      }
+      if (kindCase_ == KindOneofCase.BlobValue) {
+        size += 1 + pb::CodedOutputStream.ComputeBytesSize(BlobValue);
       }
       if (_unknownFields != null) {
         size += _unknownFields.CalculateSize();
@@ -1045,16 +1270,34 @@ namespace DuckDbProto {
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
-    public void MergeFrom(Value other) {
+    public void MergeFrom(TypedValue other) {
       if (other == null) {
         return;
       }
-      if (other.Text.Length != 0) {
-        Text = other.Text;
+      switch (other.KindCase) {
+        case KindOneofCase.IsNull:
+          IsNull = other.IsNull;
+          break;
+        case KindOneofCase.BoolValue:
+          BoolValue = other.BoolValue;
+          break;
+        case KindOneofCase.Int32Value:
+          Int32Value = other.Int32Value;
+          break;
+        case KindOneofCase.Int64Value:
+          Int64Value = other.Int64Value;
+          break;
+        case KindOneofCase.DoubleValue:
+          DoubleValue = other.DoubleValue;
+          break;
+        case KindOneofCase.StringValue:
+          StringValue = other.StringValue;
+          break;
+        case KindOneofCase.BlobValue:
+          BlobValue = other.BlobValue;
+          break;
       }
-      if (other.IsNull != false) {
-        IsNull = other.IsNull;
-      }
+
       _unknownFields = pb::UnknownFieldSet.MergeFrom(_unknownFields, other._unknownFields);
     }
 
@@ -1070,12 +1313,32 @@ namespace DuckDbProto {
           default:
             _unknownFields = pb::UnknownFieldSet.MergeFieldFrom(_unknownFields, input);
             break;
-          case 10: {
-            Text = input.ReadString();
+          case 8: {
+            IsNull = input.ReadBool();
             break;
           }
           case 16: {
-            IsNull = input.ReadBool();
+            BoolValue = input.ReadBool();
+            break;
+          }
+          case 24: {
+            Int32Value = input.ReadInt32();
+            break;
+          }
+          case 32: {
+            Int64Value = input.ReadInt64();
+            break;
+          }
+          case 41: {
+            DoubleValue = input.ReadDouble();
+            break;
+          }
+          case 50: {
+            StringValue = input.ReadString();
+            break;
+          }
+          case 58: {
+            BlobValue = input.ReadBytes();
             break;
           }
         }
@@ -1093,12 +1356,32 @@ namespace DuckDbProto {
           default:
             _unknownFields = pb::UnknownFieldSet.MergeFieldFrom(_unknownFields, ref input);
             break;
-          case 10: {
-            Text = input.ReadString();
+          case 8: {
+            IsNull = input.ReadBool();
             break;
           }
           case 16: {
-            IsNull = input.ReadBool();
+            BoolValue = input.ReadBool();
+            break;
+          }
+          case 24: {
+            Int32Value = input.ReadInt32();
+            break;
+          }
+          case 32: {
+            Int64Value = input.ReadInt64();
+            break;
+          }
+          case 41: {
+            DoubleValue = input.ReadDouble();
+            break;
+          }
+          case 50: {
+            StringValue = input.ReadString();
+            break;
+          }
+          case 58: {
+            BlobValue = input.ReadBytes();
             break;
           }
         }
