@@ -1,11 +1,7 @@
 //! Write serializer: batches concurrent DML into single transactions.
-//!
-//! DuckDB supports one writer at a time. This module queues write requests
-//! and executes them in batched transactions for maximum throughput.
-//! Also supports bulk insert via DuckDB's Appender API.
 
 use crate::proto::{ColumnData, ColumnMeta};
-use duckdb::Connection;
+use duckdb::{Connection, Database};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
@@ -23,11 +19,11 @@ pub struct WriteSerializer {
 }
 
 impl WriteSerializer {
-    pub fn new(db_path: &str, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
-        let conn = Connection::open(db_path)
+    pub fn new(db: &Database, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
+        let conn = db.connect()
             .map_err(|e| format!("Writer connection failed: {}", e))?;
 
-        let writer_conn = Connection::open(db_path)
+        let writer_conn = db.connect()
             .map_err(|e| format!("Bulk insert connection failed: {}", e))?;
 
         let (tx, rx) = mpsc::channel::<WriteRequest>();
@@ -46,7 +42,6 @@ impl WriteSerializer {
         })
     }
 
-    /// Submit a SQL statement and block until committed.
     pub fn submit(&self, sql: &str) -> Result<(), String> {
         let (result_tx, result_rx) = mpsc::channel();
         let req = WriteRequest {
@@ -65,7 +60,6 @@ impl WriteSerializer {
             .map_err(|_| "Write timed out after 30 seconds".to_string())?
     }
 
-    /// Bulk insert using DuckDB Appender API (bypasses SQL parser).
     pub fn bulk_insert(
         &self,
         table: &str,
@@ -74,17 +68,11 @@ impl WriteSerializer {
         row_count: usize,
     ) -> Result<usize, String> {
         let conn = self.writer_conn.lock().unwrap();
-        let mut appender = conn
-            .appender(table)
-            .map_err(|e| format!("Appender failed for {}: {}", table, e))?;
-
-        // Build INSERT SQL from columnar data (Appender API varies by duckdb crate version)
         let col_count = data.len();
         if col_count == 0 || row_count == 0 {
             return Ok(0);
         }
 
-        // Use multi-row INSERT for maximum compatibility
         let mut sql = format!("INSERT INTO {} VALUES ", table);
         for r in 0..row_count {
             if r > 0 { sql.push_str(", "); }
@@ -117,15 +105,9 @@ impl WriteSerializer {
         conn.execute_batch(&sql)
             .map_err(|e| format!("Bulk insert failed: {}", e))?;
 
-        appender
-            .flush()
-            .map_err(|e| format!("Appender flush failed: {}", e))?;
-
         Ok(row_count)
     }
 }
-
-// ── Writer background thread ─────────────────────────────────────────────────
 
 fn drain_loop(
     conn: Connection,
@@ -134,21 +116,17 @@ fn drain_loop(
     batch_max: usize,
 ) {
     loop {
-        // Wait for first request
         let first = match rx.recv() {
             Ok(r) => r,
-            Err(_) => return, // channel closed, shut down
+            Err(_) => return,
         };
 
         let mut batch = vec![first];
 
-        // Collect more for batch_ms or until batch_max
         let deadline = std::time::Instant::now() + Duration::from_millis(batch_ms);
         while batch.len() < batch_max {
             let timeout = deadline.saturating_duration_since(std::time::Instant::now());
-            if timeout.is_zero() {
-                break;
-            }
+            if timeout.is_zero() { break; }
             match rx.recv_timeout(timeout) {
                 Ok(req) => batch.push(req),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
@@ -161,9 +139,7 @@ fn drain_loop(
 }
 
 fn execute_batch(conn: &Connection, batch: &[WriteRequest]) {
-    // Try batched transaction
     if conn.execute_batch("BEGIN").is_err() {
-        // Fallback: execute each individually
         for req in batch {
             let result = conn.execute_batch(&req.sql);
             let _ = req.result_tx.send(result.map_err(|e| e.to_string()));
@@ -196,7 +172,6 @@ fn execute_batch(conn: &Connection, batch: &[WriteRequest]) {
         return;
     }
 
-    // All succeeded
     for req in batch {
         let _ = req.result_tx.send(Ok(()));
     }

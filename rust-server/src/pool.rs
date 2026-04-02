@@ -1,22 +1,16 @@
 //! Thread-safe fixed-size DuckDB connection pool.
 //!
-//! Uses crossbeam::ArrayQueue (lock-free bounded MPMC queue) for
-//! zero-contention borrow/return at high concurrency.
+//! Opens the database ONCE, then creates multiple connections from it.
+//! Uses crossbeam::ArrayQueue (lock-free bounded MPMC queue).
 
 use crossbeam::queue::ArrayQueue;
-use duckdb::Connection;
+use duckdb::{Connection, Database};
 use std::sync::Arc;
 
 /// RAII handle that returns the connection to the pool on drop.
 pub struct Handle {
     conn: Option<Connection>,
     pool: Arc<ArrayQueue<Connection>>,
-}
-
-impl Handle {
-    pub fn get(&self) -> &Connection {
-        self.conn.as_ref().unwrap()
-    }
 }
 
 impl std::ops::Deref for Handle {
@@ -37,28 +31,30 @@ impl Drop for Handle {
 /// Lock-free connection pool using crossbeam ArrayQueue.
 pub struct ConnectionPool {
     queue: Arc<ArrayQueue<Connection>>,
+    db: Database,
     size: usize,
 }
 
 impl ConnectionPool {
-    /// Create a pool with `size` connections to the given database.
     pub fn new(db_path: &str, size: usize) -> Result<Self, String> {
         let queue = Arc::new(ArrayQueue::new(size));
 
+        // Open the database ONCE
+        let db = Database::open(db_path)
+            .map_err(|e| format!("Failed to open database: {}", e))?;
+
+        // Create multiple connections from the same database handle
         for i in 0..size {
-            let conn = Connection::open(db_path)
+            let conn = db.connect()
                 .map_err(|e| format!("Failed to create connection {}/{}: {}", i + 1, size, e))?;
-            queue
-                .push(conn)
+            queue.push(conn)
                 .map_err(|_| "Queue full during init".to_string())?;
         }
 
-        Ok(Self { queue, size })
+        Ok(Self { queue, db, size })
     }
 
-    /// Borrow a connection. Spins briefly then yields if none available.
     pub fn borrow(&self) -> Result<Handle, String> {
-        // Fast path: try to pop immediately
         if let Some(conn) = self.queue.pop() {
             return Ok(Handle {
                 conn: Some(conn),
@@ -66,7 +62,6 @@ impl ConnectionPool {
             });
         }
 
-        // Slow path: spin + yield for up to 10 seconds
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             std::thread::yield_now();
@@ -83,6 +78,10 @@ impl ConnectionPool {
                 ));
             }
         }
+    }
+
+    pub fn database(&self) -> &Database {
+        &self.db
     }
 
     pub fn size(&self) -> usize {
