@@ -60,7 +60,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>..\third_party\duckdb\lib;$(GrpcRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>grpc++.lib;grpc.lib;libprotobuf.lib;gpr.lib;address_sorting.lib;cares.lib;zlib.lib;ssl.lib;crypto.lib;re2.lib;upb.lib;duckdb.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>grpc++.lib;grpc.lib;libprotobuf.lib;gpr.lib;address_sorting.lib;cares.lib;zlib.lib;ssl.lib;crypto.lib;re2.lib;upb.lib;absl_base.lib;absl_strings.lib;absl_strings_internal.lib;absl_str_format_internal.lib;absl_status.lib;absl_statusor.lib;absl_cord.lib;absl_synchronization.lib;absl_graphcycles_internal.lib;absl_malloc_internal.lib;absl_time.lib;absl_time_zone.lib;absl_civil_time.lib;absl_int128.lib;absl_raw_logging_internal.lib;absl_log_severity.lib;absl_spinlock_wait.lib;absl_throw_delegate.lib;absl_bad_optional_access.lib;absl_bad_variant_access.lib;absl_city.lib;absl_hash.lib;absl_hashtablez_sampler.lib;absl_raw_hash_set.lib;absl_exponential_biased.lib;absl_demangle_internal.lib;absl_stacktrace.lib;absl_symbolize.lib;absl_debugging_internal.lib;duckdb.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>if not exist "$(ProtoGenDir)" mkdir "$(ProtoGenDir)"
@@ -91,7 +91,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>..\third_party\duckdb\lib;$(GrpcRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>grpc++.lib;grpc.lib;libprotobuf.lib;gpr.lib;address_sorting.lib;cares.lib;zlib.lib;ssl.lib;crypto.lib;re2.lib;upb.lib;duckdb.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>grpc++.lib;grpc.lib;libprotobuf.lib;gpr.lib;address_sorting.lib;cares.lib;zlib.lib;ssl.lib;crypto.lib;re2.lib;upb.lib;absl_base.lib;absl_strings.lib;absl_strings_internal.lib;absl_str_format_internal.lib;absl_status.lib;absl_statusor.lib;absl_cord.lib;absl_synchronization.lib;absl_graphcycles_internal.lib;absl_malloc_internal.lib;absl_time.lib;absl_time_zone.lib;absl_civil_time.lib;absl_int128.lib;absl_raw_logging_internal.lib;absl_log_severity.lib;absl_spinlock_wait.lib;absl_throw_delegate.lib;absl_bad_optional_access.lib;absl_bad_variant_access.lib;absl_city.lib;absl_hash.lib;absl_hashtablez_sampler.lib;absl_raw_hash_set.lib;absl_exponential_biased.lib;absl_demangle_internal.lib;absl_stacktrace.lib;absl_symbolize.lib;absl_debugging_internal.lib;duckdb.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
     <PreBuildEvent>
