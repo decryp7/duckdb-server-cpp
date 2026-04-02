@@ -66,11 +66,25 @@ namespace DuckDbServer
                 return;
             }
 
-            // 2. Execute query on a shard
+            // 2. Execute query on a shard (with timeout)
             try
             {
                 var shard = shardedDb.NextForRead();
-                var responses = await ExecuteQuery(shard, sql, responseStream, context);
+
+                // Apply query timeout if configured
+                Task<List<QueryResponse>> queryTask = ExecuteQuery(shard, sql, responseStream, context);
+                if (config.QueryTimeoutSeconds > 0)
+                {
+                    var completed = await Task.WhenAny(queryTask,
+                        Task.Delay(TimeSpan.FromSeconds(config.QueryTimeoutSeconds)));
+                    if (completed != queryTask)
+                    {
+                        Interlocked.Increment(ref errors);
+                        throw new RpcException(new Status(StatusCode.DeadlineExceeded,
+                            "Query timed out after " + config.QueryTimeoutSeconds + " seconds"));
+                    }
+                }
+                var responses = await queryTask;
 
                 // 3. Cache the result
                 if (responses != null)

@@ -50,6 +50,9 @@ namespace DuckDbServer
         /// </summary>
         public int Shards { get; set; } = 1;
 
+        /// <summary>Query timeout in seconds. 0 = no timeout.</summary>
+        public int QueryTimeoutSeconds { get; set; } = 30;
+
         /// <summary>Path to TLS certificate PEM file. Empty for plaintext.</summary>
         public string TlsCertPath { get; set; } = "";
 

@@ -200,6 +200,7 @@ namespace DuckDbServer
                     case "--batch-ms":  config.WriteBatchMs = ParseInt(value, "--batch-ms"); break;
                     case "--batch-max":    config.WriteBatchMax = ParsePositive(value, "--batch-max"); break;
                     case "--shards":       config.Shards = ParsePositive(value, "--shards"); break;
+                    case "--timeout":      config.QueryTimeoutSeconds = ParseInt(value, "--timeout"); break;
                     case "--batch-size":   config.BatchSize = ParsePositive(value, "--batch-size"); break;
                     case "--memory-limit": config.MemoryLimit = value; break;
                     case "--threads":      config.DuckDbThreads = ParsePositive(value, "--threads"); break;

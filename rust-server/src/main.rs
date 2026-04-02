@@ -49,12 +49,16 @@ struct Args {
     batch_max: usize,
     #[arg(long, default_value_t = 2048)]
     batch_size: usize,
+    /// Query timeout in seconds (0 = no timeout)
+    #[arg(long, default_value_t = 30)]
+    timeout: u64,
 }
 
 struct DuckDbServerImpl {
     sharded_db: Arc<ShardedDuckDb>,
     query_cache: Arc<cache::QueryCache>,
     batch_size: usize,
+    timeout_secs: u64,
     port: u16,
     stat_reads: Arc<AtomicI64>,
     stat_writes: Arc<AtomicI64>,
@@ -344,6 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sharded_db: sharded_db.clone(),
         query_cache: query_cache.clone(),
         batch_size: args.batch_size,
+        timeout_secs: args.timeout,
         port: args.port,
         stat_reads: Arc::new(AtomicI64::new(0)),
         stat_writes: Arc::new(AtomicI64::new(0)),
