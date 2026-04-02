@@ -80,20 +80,23 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
-            let col_count = stmt.column_count();
-            let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
-                name: name.clone(),
-                r#type: ColumnType::TypeString as i32,
-            }).collect();
-
+            // Execute first to populate column metadata
             let rows_result = stmt.query_map([], |row| {
+                let col_count = row.as_ref().column_count();
                 let mut values = Vec::with_capacity(col_count);
                 for i in 0..col_count {
                     values.push(row.get::<_, Option<String>>(i).unwrap_or(None));
                 }
                 Ok(values)
             });
+
+            // Get column names AFTER execution
+            let col_count = stmt.column_count();
+            let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
+                name: name.clone(),
+                r#type: ColumnType::TypeString as i32,
+            }).collect();
 
             let rows = match rows_result {
                 Ok(r) => r,
