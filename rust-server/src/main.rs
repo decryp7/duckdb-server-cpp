@@ -69,9 +69,9 @@ struct DuckDbServerImpl {
     batch_size: usize,
     port: u16,
 
-    stat_reads: AtomicI64,
-    stat_writes: AtomicI64,
-    stat_errors: AtomicI64,
+    stat_reads: Arc<AtomicI64>,
+    stat_writes: Arc<AtomicI64>,
+    stat_errors: Arc<AtomicI64>,
 }
 
 // ── gRPC service implementation ──────────────────────────────────────────────
@@ -88,15 +88,13 @@ impl DuckDbService for DuckDbServerImpl {
         let sql = request.into_inner().sql;
         let pool = self.read_pool.clone();
         let batch_size = self.batch_size;
-        let stat_reads = &self.stat_reads as *const AtomicI64;
-        let stat_errors = &self.stat_errors as *const AtomicI64;
+        let stat_reads = self.stat_reads.clone();
+        let stat_errors = self.stat_errors.clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(4);
 
         // Spawn blocking task for DuckDB (it's not async-safe)
         tokio::task::spawn_blocking(move || {
-            let stat_reads = unsafe { &*stat_reads };
-            let stat_errors = unsafe { &*stat_errors };
 
             let conn = match pool.borrow() {
                 Ok(c) => c,
@@ -365,9 +363,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         writer,
         batch_size: args.batch_size,
         port: args.port,
-        stat_reads: AtomicI64::new(0),
-        stat_writes: AtomicI64::new(0),
-        stat_errors: AtomicI64::new(0),
+        stat_reads: Arc::new(AtomicI64::new(0)),
+        stat_writes: Arc::new(AtomicI64::new(0)),
+        stat_errors: Arc::new(AtomicI64::new(0)),
     };
 
     let addr = format!("{}:{}", args.host, args.port).parse()?;
