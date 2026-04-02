@@ -64,7 +64,13 @@ namespace DuckArrowServer
 
             // Wait with a timeout so we don't hang forever if the writer thread dies.
             bool signalled = request.DoneSignal.Wait(TimeSpan.FromSeconds(30));
-            request.DoneSignal.Dispose();
+
+            // Only dispose DoneSignal if the wait was signalled.
+            // If timeout fired, the writer thread may still call Set() later.
+            // Disposing here would crash the writer thread with ObjectDisposedException,
+            // permanently killing all future writes.
+            if (signalled)
+                request.DoneSignal.Dispose();
 
             if (!signalled)
             {
