@@ -65,6 +65,10 @@ namespace DuckDbProto {
     [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
     static readonly grpc::Marshaller<global::DuckDbProto.ExecuteResponse> __Marshaller_duckdb_v1_ExecuteResponse = grpc::Marshallers.Create(__Helper_SerializeMessage, context => __Helper_DeserializeMessage(context, global::DuckDbProto.ExecuteResponse.Parser));
     [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+    static readonly grpc::Marshaller<global::DuckDbProto.BulkInsertRequest> __Marshaller_duckdb_v1_BulkInsertRequest = grpc::Marshallers.Create(__Helper_SerializeMessage, context => __Helper_DeserializeMessage(context, global::DuckDbProto.BulkInsertRequest.Parser));
+    [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+    static readonly grpc::Marshaller<global::DuckDbProto.BulkInsertResponse> __Marshaller_duckdb_v1_BulkInsertResponse = grpc::Marshallers.Create(__Helper_SerializeMessage, context => __Helper_DeserializeMessage(context, global::DuckDbProto.BulkInsertResponse.Parser));
+    [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
     static readonly grpc::Marshaller<global::DuckDbProto.PingRequest> __Marshaller_duckdb_v1_PingRequest = grpc::Marshallers.Create(__Helper_SerializeMessage, context => __Helper_DeserializeMessage(context, global::DuckDbProto.PingRequest.Parser));
     [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
     static readonly grpc::Marshaller<global::DuckDbProto.PingResponse> __Marshaller_duckdb_v1_PingResponse = grpc::Marshallers.Create(__Helper_SerializeMessage, context => __Helper_DeserializeMessage(context, global::DuckDbProto.PingResponse.Parser));
@@ -88,6 +92,14 @@ namespace DuckDbProto {
         "Execute",
         __Marshaller_duckdb_v1_ExecuteRequest,
         __Marshaller_duckdb_v1_ExecuteResponse);
+
+    [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+    static readonly grpc::Method<global::DuckDbProto.BulkInsertRequest, global::DuckDbProto.BulkInsertResponse> __Method_BulkInsert = new grpc::Method<global::DuckDbProto.BulkInsertRequest, global::DuckDbProto.BulkInsertResponse>(
+        grpc::MethodType.Unary,
+        __ServiceName,
+        "BulkInsert",
+        __Marshaller_duckdb_v1_BulkInsertRequest,
+        __Marshaller_duckdb_v1_BulkInsertResponse);
 
     [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
     static readonly grpc::Method<global::DuckDbProto.PingRequest, global::DuckDbProto.PingResponse> __Method_Ping = new grpc::Method<global::DuckDbProto.PingRequest, global::DuckDbProto.PingResponse>(
@@ -123,6 +135,20 @@ namespace DuckDbProto {
 
       [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
       public virtual global::System.Threading.Tasks.Task<global::DuckDbProto.ExecuteResponse> Execute(global::DuckDbProto.ExecuteRequest request, grpc::ServerCallContext context)
+      {
+        throw new grpc::RpcException(new grpc::Status(grpc::StatusCode.Unimplemented, ""));
+      }
+
+      /// <summary>
+      /// Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
+      /// Bypasses SQL parser entirely — writes directly to storage.
+      /// Client sends columnar data; server appends via duckdb_appender.
+      /// </summary>
+      /// <param name="request">The request received from the client.</param>
+      /// <param name="context">The context of the server-side call handler being invoked.</param>
+      /// <returns>The response to send back to the client (wrapped by a task).</returns>
+      [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+      public virtual global::System.Threading.Tasks.Task<global::DuckDbProto.BulkInsertResponse> BulkInsert(global::DuckDbProto.BulkInsertRequest request, grpc::ServerCallContext context)
       {
         throw new grpc::RpcException(new grpc::Status(grpc::StatusCode.Unimplemented, ""));
       }
@@ -198,6 +224,62 @@ namespace DuckDbProto {
       {
         return CallInvoker.AsyncUnaryCall(__Method_Execute, null, options, request);
       }
+      /// <summary>
+      /// Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
+      /// Bypasses SQL parser entirely — writes directly to storage.
+      /// Client sends columnar data; server appends via duckdb_appender.
+      /// </summary>
+      /// <param name="request">The request to send to the server.</param>
+      /// <param name="headers">The initial metadata to send with the call. This parameter is optional.</param>
+      /// <param name="deadline">An optional deadline for the call. The call will be cancelled if deadline is hit.</param>
+      /// <param name="cancellationToken">An optional token for canceling the call.</param>
+      /// <returns>The response received from the server.</returns>
+      [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+      public virtual global::DuckDbProto.BulkInsertResponse BulkInsert(global::DuckDbProto.BulkInsertRequest request, grpc::Metadata headers = null, global::System.DateTime? deadline = null, global::System.Threading.CancellationToken cancellationToken = default(global::System.Threading.CancellationToken))
+      {
+        return BulkInsert(request, new grpc::CallOptions(headers, deadline, cancellationToken));
+      }
+      /// <summary>
+      /// Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
+      /// Bypasses SQL parser entirely — writes directly to storage.
+      /// Client sends columnar data; server appends via duckdb_appender.
+      /// </summary>
+      /// <param name="request">The request to send to the server.</param>
+      /// <param name="options">The options for the call.</param>
+      /// <returns>The response received from the server.</returns>
+      [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+      public virtual global::DuckDbProto.BulkInsertResponse BulkInsert(global::DuckDbProto.BulkInsertRequest request, grpc::CallOptions options)
+      {
+        return CallInvoker.BlockingUnaryCall(__Method_BulkInsert, null, options, request);
+      }
+      /// <summary>
+      /// Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
+      /// Bypasses SQL parser entirely — writes directly to storage.
+      /// Client sends columnar data; server appends via duckdb_appender.
+      /// </summary>
+      /// <param name="request">The request to send to the server.</param>
+      /// <param name="headers">The initial metadata to send with the call. This parameter is optional.</param>
+      /// <param name="deadline">An optional deadline for the call. The call will be cancelled if deadline is hit.</param>
+      /// <param name="cancellationToken">An optional token for canceling the call.</param>
+      /// <returns>The call object.</returns>
+      [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+      public virtual grpc::AsyncUnaryCall<global::DuckDbProto.BulkInsertResponse> BulkInsertAsync(global::DuckDbProto.BulkInsertRequest request, grpc::Metadata headers = null, global::System.DateTime? deadline = null, global::System.Threading.CancellationToken cancellationToken = default(global::System.Threading.CancellationToken))
+      {
+        return BulkInsertAsync(request, new grpc::CallOptions(headers, deadline, cancellationToken));
+      }
+      /// <summary>
+      /// Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
+      /// Bypasses SQL parser entirely — writes directly to storage.
+      /// Client sends columnar data; server appends via duckdb_appender.
+      /// </summary>
+      /// <param name="request">The request to send to the server.</param>
+      /// <param name="options">The options for the call.</param>
+      /// <returns>The call object.</returns>
+      [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
+      public virtual grpc::AsyncUnaryCall<global::DuckDbProto.BulkInsertResponse> BulkInsertAsync(global::DuckDbProto.BulkInsertRequest request, grpc::CallOptions options)
+      {
+        return CallInvoker.AsyncUnaryCall(__Method_BulkInsert, null, options, request);
+      }
       [global::System.CodeDom.Compiler.GeneratedCode("grpc_csharp_plugin", null)]
       public virtual global::DuckDbProto.PingResponse Ping(global::DuckDbProto.PingRequest request, grpc::Metadata headers = null, global::System.DateTime? deadline = null, global::System.Threading.CancellationToken cancellationToken = default(global::System.Threading.CancellationToken))
       {
@@ -254,6 +336,7 @@ namespace DuckDbProto {
       return grpc::ServerServiceDefinition.CreateBuilder()
           .AddMethod(__Method_Query, serviceImpl.Query)
           .AddMethod(__Method_Execute, serviceImpl.Execute)
+          .AddMethod(__Method_BulkInsert, serviceImpl.BulkInsert)
           .AddMethod(__Method_Ping, serviceImpl.Ping)
           .AddMethod(__Method_GetStats, serviceImpl.GetStats).Build();
     }
@@ -267,6 +350,7 @@ namespace DuckDbProto {
     {
       serviceBinder.AddMethod(__Method_Query, serviceImpl == null ? null : new grpc::ServerStreamingServerMethod<global::DuckDbProto.QueryRequest, global::DuckDbProto.QueryResponse>(serviceImpl.Query));
       serviceBinder.AddMethod(__Method_Execute, serviceImpl == null ? null : new grpc::UnaryServerMethod<global::DuckDbProto.ExecuteRequest, global::DuckDbProto.ExecuteResponse>(serviceImpl.Execute));
+      serviceBinder.AddMethod(__Method_BulkInsert, serviceImpl == null ? null : new grpc::UnaryServerMethod<global::DuckDbProto.BulkInsertRequest, global::DuckDbProto.BulkInsertResponse>(serviceImpl.BulkInsert));
       serviceBinder.AddMethod(__Method_Ping, serviceImpl == null ? null : new grpc::UnaryServerMethod<global::DuckDbProto.PingRequest, global::DuckDbProto.PingResponse>(serviceImpl.Ping));
       serviceBinder.AddMethod(__Method_GetStats, serviceImpl == null ? null : new grpc::UnaryServerMethod<global::DuckDbProto.StatsRequest, global::DuckDbProto.StatsResponse>(serviceImpl.GetStats));
     }

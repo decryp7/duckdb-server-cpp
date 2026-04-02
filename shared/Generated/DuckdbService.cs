@@ -39,21 +39,27 @@ namespace DuckDbProto {
             "C1BpbmdSZXF1ZXN0Ih8KDFBpbmdSZXNwb25zZRIPCgdtZXNzYWdlGAEgASgJ",
             "Ig4KDFN0YXRzUmVxdWVzdCJ0Cg1TdGF0c1Jlc3BvbnNlEhQKDHF1ZXJpZXNf",
             "cmVhZBgBIAEoAxIVCg1xdWVyaWVzX3dyaXRlGAIgASgDEg4KBmVycm9ycxgD",
-            "IAEoAxIYChByZWFkZXJfcG9vbF9zaXplGAQgASgFEgwKBHBvcnQYBSABKAUq",
-            "twIKCkNvbHVtblR5cGUSEAoMVFlQRV9VTktOT1dOEAASEAoMVFlQRV9CT09M",
-            "RUFOEAESDgoKVFlQRV9JTlQzMhACEg4KClRZUEVfSU5UNjQQAxIOCgpUWVBF",
-            "X0ZMT0FUEAQSDwoLVFlQRV9ET1VCTEUQBRIPCgtUWVBFX1NUUklORxAGEg0K",
-            "CVRZUEVfQkxPQhAHEhIKDlRZUEVfVElNRVNUQU1QEAgSDQoJVFlQRV9EQVRF",
-            "EAkSDQoJVFlQRV9USU1FEAoSEAoMVFlQRV9ERUNJTUFMEAsSDQoJVFlQRV9J",
-            "TlQ4EAwSDgoKVFlQRV9JTlQxNhANEg4KClRZUEVfVUlOVDgQDhIPCgtUWVBF",
-            "X1VJTlQxNhAPEg8KC1RZUEVfVUlOVDMyEBASDwoLVFlQRV9VSU5UNjQQETKH",
-            "AgoNRHVja0RiU2VydmljZRI8CgVRdWVyeRIXLmR1Y2tkYi52MS5RdWVyeVJl",
-            "cXVlc3QaGC5kdWNrZGIudjEuUXVlcnlSZXNwb25zZTABEkAKB0V4ZWN1dGUS",
-            "GS5kdWNrZGIudjEuRXhlY3V0ZVJlcXVlc3QaGi5kdWNrZGIudjEuRXhlY3V0",
-            "ZVJlc3BvbnNlEjcKBFBpbmcSFi5kdWNrZGIudjEuUGluZ1JlcXVlc3QaFy5k",
-            "dWNrZGIudjEuUGluZ1Jlc3BvbnNlEj0KCEdldFN0YXRzEhcuZHVja2RiLnYx",
-            "LlN0YXRzUmVxdWVzdBoYLmR1Y2tkYi52MS5TdGF0c1Jlc3BvbnNlQg6qAgtE",
-            "dWNrRGJQcm90b2IGcHJvdG8z"));
+            "IAEoAxIYChByZWFkZXJfcG9vbF9zaXplGAQgASgFEgwKBHBvcnQYBSABKAUi",
+            "ggEKEUJ1bGtJbnNlcnRSZXF1ZXN0Eg0KBXRhYmxlGAEgASgJEiYKB2NvbHVt",
+            "bnMYAiADKAsyFS5kdWNrZGIudjEuQ29sdW1uTWV0YRIjCgRkYXRhGAMgAygL",
+            "MhUuZHVja2RiLnYxLkNvbHVtbkRhdGESEQoJcm93X2NvdW50GAQgASgFIksK",
+            "EkJ1bGtJbnNlcnRSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9y",
+            "GAIgASgJEhUKDXJvd3NfaW5zZXJ0ZWQYAyABKAMqtwIKCkNvbHVtblR5cGUS",
+            "EAoMVFlQRV9VTktOT1dOEAASEAoMVFlQRV9CT09MRUFOEAESDgoKVFlQRV9J",
+            "TlQzMhACEg4KClRZUEVfSU5UNjQQAxIOCgpUWVBFX0ZMT0FUEAQSDwoLVFlQ",
+            "RV9ET1VCTEUQBRIPCgtUWVBFX1NUUklORxAGEg0KCVRZUEVfQkxPQhAHEhIK",
+            "DlRZUEVfVElNRVNUQU1QEAgSDQoJVFlQRV9EQVRFEAkSDQoJVFlQRV9USU1F",
+            "EAoSEAoMVFlQRV9ERUNJTUFMEAsSDQoJVFlQRV9JTlQ4EAwSDgoKVFlQRV9J",
+            "TlQxNhANEg4KClRZUEVfVUlOVDgQDhIPCgtUWVBFX1VJTlQxNhAPEg8KC1RZ",
+            "UEVfVUlOVDMyEBASDwoLVFlQRV9VSU5UNjQQETLSAgoNRHVja0RiU2Vydmlj",
+            "ZRI8CgVRdWVyeRIXLmR1Y2tkYi52MS5RdWVyeVJlcXVlc3QaGC5kdWNrZGIu",
+            "djEuUXVlcnlSZXNwb25zZTABEkAKB0V4ZWN1dGUSGS5kdWNrZGIudjEuRXhl",
+            "Y3V0ZVJlcXVlc3QaGi5kdWNrZGIudjEuRXhlY3V0ZVJlc3BvbnNlEkkKCkJ1",
+            "bGtJbnNlcnQSHC5kdWNrZGIudjEuQnVsa0luc2VydFJlcXVlc3QaHS5kdWNr",
+            "ZGIudjEuQnVsa0luc2VydFJlc3BvbnNlEjcKBFBpbmcSFi5kdWNrZGIudjEu",
+            "UGluZ1JlcXVlc3QaFy5kdWNrZGIudjEuUGluZ1Jlc3BvbnNlEj0KCEdldFN0",
+            "YXRzEhcuZHVja2RiLnYxLlN0YXRzUmVxdWVzdBoYLmR1Y2tkYi52MS5TdGF0",
+            "c1Jlc3BvbnNlQg6qAgtEdWNrRGJQcm90b2IGcHJvdG8z"));
       descriptor = pbr::FileDescriptor.FromGeneratedCode(descriptorData,
           new pbr::FileDescriptor[] { },
           new pbr::GeneratedClrTypeInfo(new[] {typeof(global::DuckDbProto.ColumnType), }, null, new pbr::GeneratedClrTypeInfo[] {
@@ -66,7 +72,9 @@ namespace DuckDbProto {
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.PingRequest), global::DuckDbProto.PingRequest.Parser, null, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.PingResponse), global::DuckDbProto.PingResponse.Parser, new[]{ "Message" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.StatsRequest), global::DuckDbProto.StatsRequest.Parser, null, null, null, null, null),
-            new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.StatsResponse), global::DuckDbProto.StatsResponse.Parser, new[]{ "QueriesRead", "QueriesWrite", "Errors", "ReaderPoolSize", "Port" }, null, null, null, null)
+            new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.StatsResponse), global::DuckDbProto.StatsResponse.Parser, new[]{ "QueriesRead", "QueriesWrite", "Errors", "ReaderPoolSize", "Port" }, null, null, null, null),
+            new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.BulkInsertRequest), global::DuckDbProto.BulkInsertRequest.Parser, new[]{ "Table", "Columns", "Data", "RowCount" }, null, null, null, null),
+            new pbr::GeneratedClrTypeInfo(typeof(global::DuckDbProto.BulkInsertResponse), global::DuckDbProto.BulkInsertResponse.Parser, new[]{ "Success", "Error", "RowsInserted" }, null, null, null, null)
           }));
     }
     #endregion
@@ -2389,6 +2397,572 @@ namespace DuckDbProto {
           }
           case 40: {
             Port = input.ReadInt32();
+            break;
+          }
+        }
+      }
+    }
+    #endif
+
+  }
+
+  /// <summary>
+  /// Bulk insert request: columnar data written directly via DuckDB Appender API.
+  /// 100x faster than individual INSERT SQL statements because it bypasses
+  /// the SQL parser, planner, and optimizer entirely.
+  ///
+  /// Usage:
+  ///   client.BulkInsert({table: "events", columns: [...], data: [...]})
+  ///
+  /// The table must already exist. Column order must match the schema.
+  /// </summary>
+  public sealed partial class BulkInsertRequest : pb::IMessage<BulkInsertRequest>
+  #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+      , pb::IBufferMessage
+  #endif
+  {
+    private static readonly pb::MessageParser<BulkInsertRequest> _parser = new pb::MessageParser<BulkInsertRequest>(() => new BulkInsertRequest());
+    private pb::UnknownFieldSet _unknownFields;
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public static pb::MessageParser<BulkInsertRequest> Parser { get { return _parser; } }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public static pbr::MessageDescriptor Descriptor {
+      get { return global::DuckDbProto.DuckdbServiceReflection.Descriptor.MessageTypes[10]; }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    pbr::MessageDescriptor pb::IMessage.Descriptor {
+      get { return Descriptor; }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public BulkInsertRequest() {
+      OnConstruction();
+    }
+
+    partial void OnConstruction();
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public BulkInsertRequest(BulkInsertRequest other) : this() {
+      table_ = other.table_;
+      columns_ = other.columns_.Clone();
+      data_ = other.data_.Clone();
+      rowCount_ = other.rowCount_;
+      _unknownFields = pb::UnknownFieldSet.Clone(other._unknownFields);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public BulkInsertRequest Clone() {
+      return new BulkInsertRequest(this);
+    }
+
+    /// <summary>Field number for the "table" field.</summary>
+    public const int TableFieldNumber = 1;
+    private string table_ = "";
+    /// <summary>
+    /// Target table name
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public string Table {
+      get { return table_; }
+      set {
+        table_ = pb::ProtoPreconditions.CheckNotNull(value, "value");
+      }
+    }
+
+    /// <summary>Field number for the "columns" field.</summary>
+    public const int ColumnsFieldNumber = 2;
+    private static readonly pb::FieldCodec<global::DuckDbProto.ColumnMeta> _repeated_columns_codec
+        = pb::FieldCodec.ForMessage(18, global::DuckDbProto.ColumnMeta.Parser);
+    private readonly pbc::RepeatedField<global::DuckDbProto.ColumnMeta> columns_ = new pbc::RepeatedField<global::DuckDbProto.ColumnMeta>();
+    /// <summary>
+    /// Column metadata (names + types)
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public pbc::RepeatedField<global::DuckDbProto.ColumnMeta> Columns {
+      get { return columns_; }
+    }
+
+    /// <summary>Field number for the "data" field.</summary>
+    public const int DataFieldNumber = 3;
+    private static readonly pb::FieldCodec<global::DuckDbProto.ColumnData> _repeated_data_codec
+        = pb::FieldCodec.ForMessage(26, global::DuckDbProto.ColumnData.Parser);
+    private readonly pbc::RepeatedField<global::DuckDbProto.ColumnData> data_ = new pbc::RepeatedField<global::DuckDbProto.ColumnData>();
+    /// <summary>
+    /// Columnar data (same format as QueryResponse)
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public pbc::RepeatedField<global::DuckDbProto.ColumnData> Data {
+      get { return data_; }
+    }
+
+    /// <summary>Field number for the "row_count" field.</summary>
+    public const int RowCountFieldNumber = 4;
+    private int rowCount_;
+    /// <summary>
+    /// Number of rows in this batch
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public int RowCount {
+      get { return rowCount_; }
+      set {
+        rowCount_ = value;
+      }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public override bool Equals(object other) {
+      return Equals(other as BulkInsertRequest);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public bool Equals(BulkInsertRequest other) {
+      if (ReferenceEquals(other, null)) {
+        return false;
+      }
+      if (ReferenceEquals(other, this)) {
+        return true;
+      }
+      if (Table != other.Table) return false;
+      if(!columns_.Equals(other.columns_)) return false;
+      if(!data_.Equals(other.data_)) return false;
+      if (RowCount != other.RowCount) return false;
+      return Equals(_unknownFields, other._unknownFields);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public override int GetHashCode() {
+      int hash = 1;
+      if (Table.Length != 0) hash ^= Table.GetHashCode();
+      hash ^= columns_.GetHashCode();
+      hash ^= data_.GetHashCode();
+      if (RowCount != 0) hash ^= RowCount.GetHashCode();
+      if (_unknownFields != null) {
+        hash ^= _unknownFields.GetHashCode();
+      }
+      return hash;
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public override string ToString() {
+      return pb::JsonFormatter.ToDiagnosticString(this);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void WriteTo(pb::CodedOutputStream output) {
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+      output.WriteRawMessage(this);
+    #else
+      if (Table.Length != 0) {
+        output.WriteRawTag(10);
+        output.WriteString(Table);
+      }
+      columns_.WriteTo(output, _repeated_columns_codec);
+      data_.WriteTo(output, _repeated_data_codec);
+      if (RowCount != 0) {
+        output.WriteRawTag(32);
+        output.WriteInt32(RowCount);
+      }
+      if (_unknownFields != null) {
+        _unknownFields.WriteTo(output);
+      }
+    #endif
+    }
+
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    void pb::IBufferMessage.InternalWriteTo(ref pb::WriteContext output) {
+      if (Table.Length != 0) {
+        output.WriteRawTag(10);
+        output.WriteString(Table);
+      }
+      columns_.WriteTo(ref output, _repeated_columns_codec);
+      data_.WriteTo(ref output, _repeated_data_codec);
+      if (RowCount != 0) {
+        output.WriteRawTag(32);
+        output.WriteInt32(RowCount);
+      }
+      if (_unknownFields != null) {
+        _unknownFields.WriteTo(ref output);
+      }
+    }
+    #endif
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public int CalculateSize() {
+      int size = 0;
+      if (Table.Length != 0) {
+        size += 1 + pb::CodedOutputStream.ComputeStringSize(Table);
+      }
+      size += columns_.CalculateSize(_repeated_columns_codec);
+      size += data_.CalculateSize(_repeated_data_codec);
+      if (RowCount != 0) {
+        size += 1 + pb::CodedOutputStream.ComputeInt32Size(RowCount);
+      }
+      if (_unknownFields != null) {
+        size += _unknownFields.CalculateSize();
+      }
+      return size;
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void MergeFrom(BulkInsertRequest other) {
+      if (other == null) {
+        return;
+      }
+      if (other.Table.Length != 0) {
+        Table = other.Table;
+      }
+      columns_.Add(other.columns_);
+      data_.Add(other.data_);
+      if (other.RowCount != 0) {
+        RowCount = other.RowCount;
+      }
+      _unknownFields = pb::UnknownFieldSet.MergeFrom(_unknownFields, other._unknownFields);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void MergeFrom(pb::CodedInputStream input) {
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+      input.ReadRawMessage(this);
+    #else
+      uint tag;
+      while ((tag = input.ReadTag()) != 0) {
+        switch(tag) {
+          default:
+            _unknownFields = pb::UnknownFieldSet.MergeFieldFrom(_unknownFields, input);
+            break;
+          case 10: {
+            Table = input.ReadString();
+            break;
+          }
+          case 18: {
+            columns_.AddEntriesFrom(input, _repeated_columns_codec);
+            break;
+          }
+          case 26: {
+            data_.AddEntriesFrom(input, _repeated_data_codec);
+            break;
+          }
+          case 32: {
+            RowCount = input.ReadInt32();
+            break;
+          }
+        }
+      }
+    #endif
+    }
+
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    void pb::IBufferMessage.InternalMergeFrom(ref pb::ParseContext input) {
+      uint tag;
+      while ((tag = input.ReadTag()) != 0) {
+        switch(tag) {
+          default:
+            _unknownFields = pb::UnknownFieldSet.MergeFieldFrom(_unknownFields, ref input);
+            break;
+          case 10: {
+            Table = input.ReadString();
+            break;
+          }
+          case 18: {
+            columns_.AddEntriesFrom(ref input, _repeated_columns_codec);
+            break;
+          }
+          case 26: {
+            data_.AddEntriesFrom(ref input, _repeated_data_codec);
+            break;
+          }
+          case 32: {
+            RowCount = input.ReadInt32();
+            break;
+          }
+        }
+      }
+    }
+    #endif
+
+  }
+
+  public sealed partial class BulkInsertResponse : pb::IMessage<BulkInsertResponse>
+  #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+      , pb::IBufferMessage
+  #endif
+  {
+    private static readonly pb::MessageParser<BulkInsertResponse> _parser = new pb::MessageParser<BulkInsertResponse>(() => new BulkInsertResponse());
+    private pb::UnknownFieldSet _unknownFields;
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public static pb::MessageParser<BulkInsertResponse> Parser { get { return _parser; } }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public static pbr::MessageDescriptor Descriptor {
+      get { return global::DuckDbProto.DuckdbServiceReflection.Descriptor.MessageTypes[11]; }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    pbr::MessageDescriptor pb::IMessage.Descriptor {
+      get { return Descriptor; }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public BulkInsertResponse() {
+      OnConstruction();
+    }
+
+    partial void OnConstruction();
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public BulkInsertResponse(BulkInsertResponse other) : this() {
+      success_ = other.success_;
+      error_ = other.error_;
+      rowsInserted_ = other.rowsInserted_;
+      _unknownFields = pb::UnknownFieldSet.Clone(other._unknownFields);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public BulkInsertResponse Clone() {
+      return new BulkInsertResponse(this);
+    }
+
+    /// <summary>Field number for the "success" field.</summary>
+    public const int SuccessFieldNumber = 1;
+    private bool success_;
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public bool Success {
+      get { return success_; }
+      set {
+        success_ = value;
+      }
+    }
+
+    /// <summary>Field number for the "error" field.</summary>
+    public const int ErrorFieldNumber = 2;
+    private string error_ = "";
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public string Error {
+      get { return error_; }
+      set {
+        error_ = pb::ProtoPreconditions.CheckNotNull(value, "value");
+      }
+    }
+
+    /// <summary>Field number for the "rows_inserted" field.</summary>
+    public const int RowsInsertedFieldNumber = 3;
+    private long rowsInserted_;
+    /// <summary>
+    /// Number of rows successfully inserted
+    /// </summary>
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public long RowsInserted {
+      get { return rowsInserted_; }
+      set {
+        rowsInserted_ = value;
+      }
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public override bool Equals(object other) {
+      return Equals(other as BulkInsertResponse);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public bool Equals(BulkInsertResponse other) {
+      if (ReferenceEquals(other, null)) {
+        return false;
+      }
+      if (ReferenceEquals(other, this)) {
+        return true;
+      }
+      if (Success != other.Success) return false;
+      if (Error != other.Error) return false;
+      if (RowsInserted != other.RowsInserted) return false;
+      return Equals(_unknownFields, other._unknownFields);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public override int GetHashCode() {
+      int hash = 1;
+      if (Success != false) hash ^= Success.GetHashCode();
+      if (Error.Length != 0) hash ^= Error.GetHashCode();
+      if (RowsInserted != 0L) hash ^= RowsInserted.GetHashCode();
+      if (_unknownFields != null) {
+        hash ^= _unknownFields.GetHashCode();
+      }
+      return hash;
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public override string ToString() {
+      return pb::JsonFormatter.ToDiagnosticString(this);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void WriteTo(pb::CodedOutputStream output) {
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+      output.WriteRawMessage(this);
+    #else
+      if (Success != false) {
+        output.WriteRawTag(8);
+        output.WriteBool(Success);
+      }
+      if (Error.Length != 0) {
+        output.WriteRawTag(18);
+        output.WriteString(Error);
+      }
+      if (RowsInserted != 0L) {
+        output.WriteRawTag(24);
+        output.WriteInt64(RowsInserted);
+      }
+      if (_unknownFields != null) {
+        _unknownFields.WriteTo(output);
+      }
+    #endif
+    }
+
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    void pb::IBufferMessage.InternalWriteTo(ref pb::WriteContext output) {
+      if (Success != false) {
+        output.WriteRawTag(8);
+        output.WriteBool(Success);
+      }
+      if (Error.Length != 0) {
+        output.WriteRawTag(18);
+        output.WriteString(Error);
+      }
+      if (RowsInserted != 0L) {
+        output.WriteRawTag(24);
+        output.WriteInt64(RowsInserted);
+      }
+      if (_unknownFields != null) {
+        _unknownFields.WriteTo(ref output);
+      }
+    }
+    #endif
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public int CalculateSize() {
+      int size = 0;
+      if (Success != false) {
+        size += 1 + 1;
+      }
+      if (Error.Length != 0) {
+        size += 1 + pb::CodedOutputStream.ComputeStringSize(Error);
+      }
+      if (RowsInserted != 0L) {
+        size += 1 + pb::CodedOutputStream.ComputeInt64Size(RowsInserted);
+      }
+      if (_unknownFields != null) {
+        size += _unknownFields.CalculateSize();
+      }
+      return size;
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void MergeFrom(BulkInsertResponse other) {
+      if (other == null) {
+        return;
+      }
+      if (other.Success != false) {
+        Success = other.Success;
+      }
+      if (other.Error.Length != 0) {
+        Error = other.Error;
+      }
+      if (other.RowsInserted != 0L) {
+        RowsInserted = other.RowsInserted;
+      }
+      _unknownFields = pb::UnknownFieldSet.MergeFrom(_unknownFields, other._unknownFields);
+    }
+
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    public void MergeFrom(pb::CodedInputStream input) {
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+      input.ReadRawMessage(this);
+    #else
+      uint tag;
+      while ((tag = input.ReadTag()) != 0) {
+        switch(tag) {
+          default:
+            _unknownFields = pb::UnknownFieldSet.MergeFieldFrom(_unknownFields, input);
+            break;
+          case 8: {
+            Success = input.ReadBool();
+            break;
+          }
+          case 18: {
+            Error = input.ReadString();
+            break;
+          }
+          case 24: {
+            RowsInserted = input.ReadInt64();
+            break;
+          }
+        }
+      }
+    #endif
+    }
+
+    #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
+    [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
+    void pb::IBufferMessage.InternalMergeFrom(ref pb::ParseContext input) {
+      uint tag;
+      while ((tag = input.ReadTag()) != 0) {
+        switch(tag) {
+          default:
+            _unknownFields = pb::UnknownFieldSet.MergeFieldFrom(_unknownFields, ref input);
+            break;
+          case 8: {
+            Success = input.ReadBool();
+            break;
+          }
+          case 18: {
+            Error = input.ReadString();
+            break;
+          }
+          case 24: {
+            RowsInserted = input.ReadInt64();
             break;
           }
         }
