@@ -70,9 +70,13 @@ namespace DuckDbServer
             if (!string.IsNullOrEmpty(config.MemoryLimit))
                 ExecutePragma("SET memory_limit='" + config.MemoryLimit + "'");
 
-            // Thread count: controls DuckDB's internal parallelism.
+            // Thread count: for server workloads with many concurrent connections,
+            // SET threads=1 per connection eliminates DuckDB internal thread contention.
+            // The connection pool provides parallelism instead.
             if (config.DuckDbThreads > 0)
                 ExecutePragma("SET threads=" + config.DuckDbThreads);
+            else
+                ExecutePragma("SET threads=1");
 
             // Enable object cache for faster metadata lookups.
             ExecutePragma("PRAGMA enable_object_cache");

@@ -15,7 +15,8 @@ prost = "0.13"
 tokio = { version = "1", features = ["full"] }
 
 # DuckDB
-duckdb = { version = "1.1", features = ["bundled"] }
+duckdb = { version = "1.1", features = ["bundled", "vtab-arrow"] }
+arrow = { version = "53", default-features = false }
 
 # Utilities
 clap = { version = "4", features = ["derive"] }
