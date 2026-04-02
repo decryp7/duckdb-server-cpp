@@ -1,5 +1,13 @@
 # Build output
 build/
+bin/
+obj/
+
+# NuGet packages (restored via nuget restore)
+packages/
+server/packages/
+client/packages/
+benchmark/packages/
 
 # IDE / editor
 .vs/
