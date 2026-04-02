@@ -13,6 +13,12 @@ namespace DuckArrowServer
     /// Uses raw gRPC with manual proto encoding/decoding because
     /// Apache.Arrow.Flight.Protocol types are internal in the NuGet package.
     ///
+    /// IMPORTANT: The IPC serialization embeds full Arrow IPC streams inside
+    /// FlightData.data_header (not individual IPC messages). This means the C#
+    /// server is compatible with the C# client (DasFlightClient) but NOT with
+    /// standard Flight clients (Python pyarrow.flight, C++ Arrow Flight, etc.).
+    /// For cross-language interop, use the C++ server instead.
+    ///
     /// Handles three types of requests:
     ///   - DoGet:   Run a SELECT query and stream Arrow batches to the client.
     ///   - DoAction: Run a command (execute SQL, ping, or get stats).

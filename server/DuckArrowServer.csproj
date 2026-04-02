@@ -38,9 +38,6 @@
     <Reference Include="Apache.Arrow">
       <HintPath>..\packages\Apache.Arrow.14.0.1\lib\netstandard2.0\Apache.Arrow.dll</HintPath>
     </Reference>
-    <Reference Include="Apache.Arrow.Flight">
-      <HintPath>..\packages\Apache.Arrow.Flight.14.0.1\lib\netstandard2.0\Apache.Arrow.Flight.dll</HintPath>
-    </Reference>
     <Reference Include="Grpc.Core">
       <HintPath>..\packages\Grpc.Core.2.46.6\lib\net45\Grpc.Core.dll</HintPath>
     </Reference>

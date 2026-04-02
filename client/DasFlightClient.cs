@@ -18,6 +18,11 @@ namespace DuckArrowClient
     /// FlightClient requires Grpc.Net.Client (needs .NET 5+), which is
     /// incompatible with .NET Framework 4.6.2 / Grpc.Core.
     ///
+    /// IMPORTANT: Compatible with the C# DuckArrowServer only. The IPC
+    /// serialization embeds full Arrow IPC streams inside FlightData.data_header,
+    /// which differs from the standard Flight wire format. For cross-language
+    /// interop, use the C++ server with a standard Flight client library.
+    ///
     /// One instance per application — HTTP/2 handles all concurrency.
     /// </summary>
     public sealed class DasFlightClient : IDasFlightClient

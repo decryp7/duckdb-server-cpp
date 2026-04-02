@@ -262,7 +262,7 @@ namespace DuckArrowClient
             }
             catch (Exception ex)
             {
-                Console.WriteLine("  Skipped: " + ex.InnerException?.Message ?? ex.Message);
+                Console.WriteLine("  Skipped: " + (ex.InnerException?.Message ?? ex.Message));
             }
             Console.WriteLine();
         }

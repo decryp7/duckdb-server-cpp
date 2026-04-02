@@ -79,9 +79,6 @@ namespace DuckArrowServer
         /// <summary>Serialize a Result proto message. Field 1 = bytes body.</summary>
         public static byte[] WriteResult(byte[] body)
         {
-            var output = new CodedOutputStream(new byte[body.Length + 10]);
-
-            // Use MemoryStream for dynamic sizing.
             using (var ms = new System.IO.MemoryStream())
             {
                 var cos = new CodedOutputStream(ms);

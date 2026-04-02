@@ -22,7 +22,7 @@ namespace DuckArrowServer
     {
         private readonly DuckDBConnection primaryConnection;
         private readonly string connectionString;
-        private bool disposed;
+        private int disposed; // 0=alive, 1=disposed; use Interlocked
 
         /// <summary>
         /// Open the database and apply performance settings.
@@ -44,7 +44,7 @@ namespace DuckArrowServer
         /// </summary>
         public DuckDBConnection CreateConnection()
         {
-            if (disposed)
+            if (System.Threading.Thread.VolatileRead(ref disposed) != 0)
                 throw new ObjectDisposedException(nameof(DatabaseManager));
 
             var conn = new DuckDBConnection(connectionString);
@@ -54,8 +54,7 @@ namespace DuckArrowServer
 
         public void Dispose()
         {
-            if (disposed) return;
-            disposed = true;
+            if (System.Threading.Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
             primaryConnection.Dispose();
         }
 
