@@ -24,7 +24,7 @@ namespace DuckDbServer
     ///   // ... execute query ...
     ///   cache.Put(sql, responses);
     /// </summary>
-    public sealed class QueryCache
+    public sealed class QueryCache : IQueryCache
     {
         private readonly ConcurrentDictionary<string, CacheEntry> entries;
         private readonly int maxEntries;

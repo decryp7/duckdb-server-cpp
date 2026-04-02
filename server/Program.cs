@@ -58,7 +58,8 @@ namespace DuckDbServer
             try
             {
                 shardedDb = new ShardedDuckDb(config);
-                duckDbServer = new DuckDbServer(config, shardedDb);
+                IQueryCache queryCache = new QueryCache(maxEntries: 10000, ttlSeconds: 60);
+                duckDbServer = new DuckDbServer(config, shardedDb, queryCache);
 
                 var credentials = BuildCredentials(config);
 

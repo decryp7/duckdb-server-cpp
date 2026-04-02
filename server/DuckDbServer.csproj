@@ -80,6 +80,8 @@
     <Compile Include="ServerConfig.cs" />
     <Compile Include="ShardedDuckDb.cs" />
     <Compile Include="QueryCache.cs" />
+    <Compile Include="IQueryCache.cs" />
+    <Compile Include="ColumnBuilder.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

@@ -8,33 +8,36 @@ using Grpc.Core;
 namespace DuckDbServer
 {
     /// <summary>
-    /// DuckDB gRPC server — columnar encoding for extreme performance.
+    /// DuckDB gRPC server — the main service class.
     ///
-    /// Values are packed into typed arrays per column (not per-cell objects).
-    /// 1000 rows × 10 columns = 10 ColumnData objects instead of 11,000 TypedValue objects.
-    /// Packed repeated fields use minimal protobuf overhead.
+    /// Responsibilities (kept minimal — delegates to specialized classes):
+    ///   - Query:      read from sharded pool, build columnar responses, cache results
+    ///   - Execute:    fan-out writes to all shards, invalidate cache
+    ///   - BulkInsert: fan-out bulk writes to all shards
+    ///   - Ping/Stats: simple responses
+    ///
+    /// Dependencies (injected via constructor):
+    ///   - ShardedDuckDb: manages database shards (read/write routing)
+    ///   - IQueryCache:   caches query results (bypass DuckDB on cache hit)
     /// </summary>
     public sealed class DuckDbServer : DuckDbService.DuckDbServiceBase, IDisposable
     {
         private readonly ServerConfig config;
         private readonly ShardedDuckDb shardedDb;
-        private readonly QueryCache queryCache;
+        private readonly IQueryCache queryCache;
+        private readonly int batchSize;
 
+        // Metrics
         private long queriesRead;
         private long queriesWrite;
         private long errors;
         private long cacheHits;
 
-        private readonly int batchSize;
-
-        /// <summary>
-        /// Create server with sharded DuckDB (round-robin across N independent instances).
-        /// </summary>
-        public DuckDbServer(ServerConfig config, ShardedDuckDb shardedDb)
+        public DuckDbServer(ServerConfig config, ShardedDuckDb shardedDb, IQueryCache queryCache)
         {
             this.config = config;
             this.shardedDb = shardedDb;
-            this.queryCache = new QueryCache(maxEntries: 10000, ttlSeconds: 60);
+            this.queryCache = queryCache;
             this.batchSize = config.BatchSize > 0 ? config.BatchSize : 8192;
         }
 
@@ -43,19 +46,7 @@ namespace DuckDbServer
             return DuckDbService.BindService(this);
         }
 
-        public ServerStats GetStats()
-        {
-            return new ServerStats
-            {
-                QueriesRead = Interlocked.Read(ref queriesRead),
-                QueriesWrite = Interlocked.Read(ref queriesWrite),
-                Errors = Interlocked.Read(ref errors),
-                ReaderPoolSize = shardedDb.TotalPoolSize,
-                Port = config.Port
-            };
-        }
-
-        // ── Query: columnar streaming ────────────────────────────────────────
+        // ── Query ────────────────────────────────────────────────────────────
 
         public override async Task Query(
             QueryRequest request,
@@ -64,8 +55,8 @@ namespace DuckDbServer
         {
             string sql = request.Sql ?? "";
 
-            // Cache check: if this exact SQL was recently executed, return cached result
-            System.Collections.Generic.List<QueryResponse> cached;
+            // 1. Check cache
+            List<QueryResponse> cached;
             if (queryCache.TryGet(sql, out cached))
             {
                 Interlocked.Increment(ref cacheHits);
@@ -75,80 +66,15 @@ namespace DuckDbServer
                 return;
             }
 
+            // 2. Execute query on a shard
             try
             {
                 var shard = shardedDb.NextForRead();
-                using (var handle = shard.Pool.Borrow())
-                using (var cmd = handle.Connection.CreateCommand())
-                {
-                    cmd.CommandText = sql;
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        int colCount = reader.FieldCount;
+                var responses = await ExecuteQuery(shard, sql, responseStream, context);
 
-                        // Cache column types
-                        var colTypes = new ColumnType[colCount];
-                        var clrTypes = new Type[colCount];
-                        var meta = new List<ColumnMeta>(colCount);
-
-                        for (int c = 0; c < colCount; c++)
-                        {
-                            clrTypes[c] = reader.GetFieldType(c);
-                            colTypes[c] = MapColumnType(clrTypes[c]);
-                            meta.Add(new ColumnMeta
-                            {
-                                Name = reader.GetName(c),
-                                Type = colTypes[c]
-                            });
-                        }
-
-                        // Pre-allocate column builders
-                        var builders = new ColumnBuilder[colCount];
-                        for (int c = 0; c < colCount; c++)
-                            builders[c] = new ColumnBuilder(colTypes[c], batchSize);
-
-                        var values = new object[colCount];
-                        int rowsInBatch = 0;
-                        bool firstBatch = true;
-                        var cachedResponses = new System.Collections.Generic.List<QueryResponse>();
-
-                        while (reader.Read())
-                        {
-                            if (context.CancellationToken.IsCancellationRequested)
-                                return;
-
-                            reader.GetValues(values);
-
-                            for (int c = 0; c < colCount; c++)
-                                builders[c].Add(values[c], rowsInBatch);
-
-                            rowsInBatch++;
-
-                            if (rowsInBatch >= batchSize)
-                            {
-                                var resp = BuildBatch(builders, colCount, rowsInBatch,
-                                    firstBatch ? meta : null);
-                                await responseStream.WriteAsync(resp).ConfigureAwait(false);
-                                cachedResponses.Add(resp);
-                                firstBatch = false;
-                                rowsInBatch = 0;
-                                for (int c = 0; c < colCount; c++)
-                                    builders[c].Reset();
-                            }
-                        }
-
-                        if (rowsInBatch > 0 || firstBatch)
-                        {
-                            var resp = BuildBatch(builders, colCount, rowsInBatch,
-                                firstBatch ? meta : null);
-                            await responseStream.WriteAsync(resp).ConfigureAwait(false);
-                            cachedResponses.Add(resp);
-                        }
-
-                        // Cache the result for future hits
-                        queryCache.Put(sql, cachedResponses);
-                    }
-                }
+                // 3. Cache the result
+                if (responses != null)
+                    queryCache.Put(sql, responses);
 
                 Interlocked.Increment(ref queriesRead);
             }
@@ -160,186 +86,93 @@ namespace DuckDbServer
             }
         }
 
-        private static QueryResponse BuildBatch(
-            ColumnBuilder[] builders, int colCount, int rowCount,
-            List<ColumnMeta> meta)
+        /// <summary>
+        /// Execute a SQL query on a shard and stream results.
+        /// Returns the list of responses for caching.
+        /// </summary>
+        private async Task<List<QueryResponse>> ExecuteQuery(
+            ShardedDuckDb.Shard shard, string sql,
+            IServerStreamWriter<QueryResponse> responseStream,
+            ServerCallContext context)
+        {
+            var responses = new List<QueryResponse>();
+
+            using (var handle = shard.Pool.Borrow())
+            using (var cmd = handle.Connection.CreateCommand())
+            {
+                cmd.CommandText = sql;
+                using (var reader = cmd.ExecuteReader())
+                {
+                    int colCount = reader.FieldCount;
+
+                    // Map columns
+                    var colTypes = new ColumnType[colCount];
+                    var meta = new List<ColumnMeta>(colCount);
+                    for (int c = 0; c < colCount; c++)
+                    {
+                        colTypes[c] = TypeMapper.FromClrType(reader.GetFieldType(c));
+                        meta.Add(new ColumnMeta
+                        {
+                            Name = reader.GetName(c),
+                            Type = colTypes[c]
+                        });
+                    }
+
+                    // Build and stream batches
+                    var builders = new ColumnBuilder[colCount];
+                    for (int c = 0; c < colCount; c++)
+                        builders[c] = new ColumnBuilder(colTypes[c], batchSize);
+
+                    var values = new object[colCount];
+                    int rowsInBatch = 0;
+                    bool firstBatch = true;
+
+                    while (reader.Read())
+                    {
+                        if (context.CancellationToken.IsCancellationRequested) return null;
+
+                        reader.GetValues(values);
+                        for (int c = 0; c < colCount; c++)
+                            builders[c].Add(values[c], rowsInBatch);
+                        rowsInBatch++;
+
+                        if (rowsInBatch >= batchSize)
+                        {
+                            var resp = BuildResponse(builders, colCount, rowsInBatch,
+                                firstBatch ? meta : null);
+                            await responseStream.WriteAsync(resp).ConfigureAwait(false);
+                            responses.Add(resp);
+                            firstBatch = false;
+                            rowsInBatch = 0;
+                            for (int c = 0; c < colCount; c++) builders[c].Reset();
+                        }
+                    }
+
+                    // Final batch
+                    if (rowsInBatch > 0 || firstBatch)
+                    {
+                        var resp = BuildResponse(builders, colCount, rowsInBatch,
+                            firstBatch ? meta : null);
+                        await responseStream.WriteAsync(resp).ConfigureAwait(false);
+                        responses.Add(resp);
+                    }
+                }
+            }
+
+            return responses;
+        }
+
+        private static QueryResponse BuildResponse(
+            ColumnBuilder[] builders, int colCount, int rowCount, List<ColumnMeta> meta)
         {
             var response = new QueryResponse { RowCount = rowCount };
-
-            if (meta != null)
-                response.Columns.AddRange(meta);
-
+            if (meta != null) response.Columns.AddRange(meta);
             for (int c = 0; c < colCount; c++)
                 response.Data.Add(builders[c].Build());
-
             return response;
         }
 
-        // ── Column builder: accumulates values into packed arrays ─────────────
-
-        private sealed class ColumnBuilder
-        {
-            private readonly ColumnType type;
-            private List<bool> bools;
-            private List<int> int32s;
-            private List<long> int64s;
-            private List<float> floats;
-            private List<double> doubles;
-            private List<string> strings;
-            private List<int> nullIndices;
-
-            public ColumnBuilder(ColumnType type, int capacity)
-            {
-                this.type = type;
-                AllocateStorage(capacity);
-            }
-
-            public void Add(object value, int rowIndex)
-            {
-                if (value == null || value is DBNull)
-                {
-                    if (nullIndices == null)
-                        nullIndices = new List<int>();
-                    nullIndices.Add(rowIndex);
-                    AddDefault();
-                    return;
-                }
-
-                switch (type)
-                {
-                    case ColumnType.TypeBoolean:
-                        bools.Add(Convert.ToBoolean(value));
-                        break;
-                    case ColumnType.TypeInt32:
-                    case ColumnType.TypeInt8:
-                    case ColumnType.TypeInt16:
-                    case ColumnType.TypeUint8:
-                    case ColumnType.TypeUint16:
-                        int32s.Add(Convert.ToInt32(value));
-                        break;
-                    case ColumnType.TypeInt64:
-                    case ColumnType.TypeUint32:
-                    case ColumnType.TypeUint64:
-                        int64s.Add(Convert.ToInt64(value));
-                        break;
-                    case ColumnType.TypeFloat:
-                        floats.Add(Convert.ToSingle(value));
-                        break;
-                    case ColumnType.TypeDouble:
-                    case ColumnType.TypeDecimal:
-                        doubles.Add(Convert.ToDouble(value));
-                        break;
-                    default:
-                        strings.Add(value.ToString());
-                        break;
-                }
-            }
-
-            private void AddDefault()
-            {
-                switch (type)
-                {
-                    case ColumnType.TypeBoolean: bools.Add(false); break;
-                    case ColumnType.TypeInt32:
-                    case ColumnType.TypeInt8:
-                    case ColumnType.TypeInt16:
-                    case ColumnType.TypeUint8:
-                    case ColumnType.TypeUint16: int32s.Add(0); break;
-                    case ColumnType.TypeInt64:
-                    case ColumnType.TypeUint32:
-                    case ColumnType.TypeUint64: int64s.Add(0); break;
-                    case ColumnType.TypeFloat: floats.Add(0); break;
-                    case ColumnType.TypeDouble:
-                    case ColumnType.TypeDecimal: doubles.Add(0); break;
-                    default: strings.Add(""); break;
-                }
-            }
-
-            public ColumnData Build()
-            {
-                var cd = new ColumnData();
-                switch (type)
-                {
-                    case ColumnType.TypeBoolean: cd.BoolValues.AddRange(bools); break;
-                    case ColumnType.TypeInt32:
-                    case ColumnType.TypeInt8:
-                    case ColumnType.TypeInt16:
-                    case ColumnType.TypeUint8:
-                    case ColumnType.TypeUint16: cd.Int32Values.AddRange(int32s); break;
-                    case ColumnType.TypeInt64:
-                    case ColumnType.TypeUint32:
-                    case ColumnType.TypeUint64: cd.Int64Values.AddRange(int64s); break;
-                    case ColumnType.TypeFloat: cd.FloatValues.AddRange(floats); break;
-                    case ColumnType.TypeDouble:
-                    case ColumnType.TypeDecimal: cd.DoubleValues.AddRange(doubles); break;
-                    default: cd.StringValues.AddRange(strings); break;
-                }
-                if (nullIndices != null)
-                    cd.NullIndices.AddRange(nullIndices);
-                return cd;
-            }
-
-            public void Reset()
-            {
-                switch (type)
-                {
-                    case ColumnType.TypeBoolean: bools.Clear(); break;
-                    case ColumnType.TypeInt32:
-                    case ColumnType.TypeInt8:
-                    case ColumnType.TypeInt16:
-                    case ColumnType.TypeUint8:
-                    case ColumnType.TypeUint16: int32s.Clear(); break;
-                    case ColumnType.TypeInt64:
-                    case ColumnType.TypeUint32:
-                    case ColumnType.TypeUint64: int64s.Clear(); break;
-                    case ColumnType.TypeFloat: floats.Clear(); break;
-                    case ColumnType.TypeDouble:
-                    case ColumnType.TypeDecimal: doubles.Clear(); break;
-                    default: strings.Clear(); break;
-                }
-                if (nullIndices != null) nullIndices.Clear();
-            }
-
-            private void AllocateStorage(int capacity)
-            {
-                switch (type)
-                {
-                    case ColumnType.TypeBoolean: bools = new List<bool>(capacity); break;
-                    case ColumnType.TypeInt32:
-                    case ColumnType.TypeInt8:
-                    case ColumnType.TypeInt16:
-                    case ColumnType.TypeUint8:
-                    case ColumnType.TypeUint16: int32s = new List<int>(capacity); break;
-                    case ColumnType.TypeInt64:
-                    case ColumnType.TypeUint32:
-                    case ColumnType.TypeUint64: int64s = new List<long>(capacity); break;
-                    case ColumnType.TypeFloat: floats = new List<float>(capacity); break;
-                    case ColumnType.TypeDouble:
-                    case ColumnType.TypeDecimal: doubles = new List<double>(capacity); break;
-                    default: strings = new List<string>(capacity); break;
-                }
-            }
-        }
-
-        private static ColumnType MapColumnType(Type clrType)
-        {
-            if (clrType == typeof(bool))    return ColumnType.TypeBoolean;
-            if (clrType == typeof(sbyte))   return ColumnType.TypeInt8;
-            if (clrType == typeof(short))   return ColumnType.TypeInt16;
-            if (clrType == typeof(int))     return ColumnType.TypeInt32;
-            if (clrType == typeof(long))    return ColumnType.TypeInt64;
-            if (clrType == typeof(byte))    return ColumnType.TypeUint8;
-            if (clrType == typeof(ushort))  return ColumnType.TypeUint16;
-            if (clrType == typeof(uint))    return ColumnType.TypeUint32;
-            if (clrType == typeof(ulong))   return ColumnType.TypeUint64;
-            if (clrType == typeof(float))   return ColumnType.TypeFloat;
-            if (clrType == typeof(double))  return ColumnType.TypeDouble;
-            if (clrType == typeof(decimal)) return ColumnType.TypeDecimal;
-            if (clrType == typeof(byte[]))  return ColumnType.TypeBlob;
-            return ColumnType.TypeString;
-        }
-
-        // ── Execute / Ping / GetStats ────────────────────────────────────────
+        // ── Execute ──────────────────────────────────────────────────────────
 
         public override Task<ExecuteResponse> Execute(ExecuteRequest request, ServerCallContext context)
         {
@@ -349,35 +182,20 @@ namespace DuckDbServer
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL required" });
             }
-            // Write: fan-out to ALL shards (keeps data consistent)
+
             var result = shardedDb.WriteToAll(sql);
             if (!result.Ok)
             {
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = result.Error });
             }
-            // Invalidate cache after successful write
+
             queryCache.Invalidate();
             Interlocked.Increment(ref queriesWrite);
             return Task.FromResult(new ExecuteResponse { Success = true });
         }
 
-        public override Task<PingResponse> Ping(PingRequest request, ServerCallContext context)
-        {
-            return Task.FromResult(new PingResponse { Message = "pong" });
-        }
-
-        public override Task<StatsResponse> GetStats(StatsRequest request, ServerCallContext context)
-        {
-            var s = GetStats();
-            return Task.FromResult(new StatsResponse
-            {
-                QueriesRead = s.QueriesRead, QueriesWrite = s.QueriesWrite,
-                Errors = s.Errors, ReaderPoolSize = s.ReaderPoolSize, Port = s.Port
-            });
-        }
-
-        // ── BulkInsert: Appender API (100x faster than INSERT SQL) ────────
+        // ── BulkInsert ───────────────────────────────────────────────────────
 
         public override Task<BulkInsertResponse> BulkInsert(
             BulkInsertRequest request, ServerCallContext context)
@@ -387,116 +205,115 @@ namespace DuckDbServer
 
             if (string.IsNullOrEmpty(table) || rowCount == 0 || request.Columns.Count == 0)
                 return Task.FromResult(new BulkInsertResponse
-                {
-                    Success = false,
-                    Error = "table, columns, and row_count are required"
-                });
+                    { Success = false, Error = "table, columns, and row_count are required" });
 
             try
             {
-                int colCount = request.Columns.Count;
-
-                // Build INSERT using parameterized values (DuckDB.NET doesn't expose Appender)
-                // This is still much faster than individual INSERTs because we batch into
-                // one multi-row INSERT statement.
-                var sb = new System.Text.StringBuilder(rowCount * colCount * 10);
-
-                for (int r = 0; r < rowCount; r++)
-                {
-                    if (r == 0)
-                        sb.AppendFormat("INSERT INTO {0} VALUES ", table);
-                    else
-                        sb.Append(", ");
-
-                    sb.Append("(");
-                    for (int c = 0; c < colCount; c++)
-                    {
-                        if (c > 0) sb.Append(", ");
-
-                        var cd = request.Data[c];
-                        bool isNull = false;
-                        for (int n = 0; n < cd.NullIndices.Count; n++)
-                            if (cd.NullIndices[n] == r) { isNull = true; break; }
-
-                        if (isNull)
-                        {
-                            sb.Append("NULL");
-                            continue;
-                        }
-
-                        switch (request.Columns[c].Type)
-                        {
-                            case ColumnType.TypeBoolean:
-                                sb.Append(r < cd.BoolValues.Count && cd.BoolValues[r] ? "true" : "false");
-                                break;
-                            case ColumnType.TypeInt32:
-                            case ColumnType.TypeInt8:
-                            case ColumnType.TypeInt16:
-                            case ColumnType.TypeUint8:
-                            case ColumnType.TypeUint16:
-                                sb.Append(r < cd.Int32Values.Count ? cd.Int32Values[r] : 0);
-                                break;
-                            case ColumnType.TypeInt64:
-                            case ColumnType.TypeUint32:
-                            case ColumnType.TypeUint64:
-                                sb.Append(r < cd.Int64Values.Count ? cd.Int64Values[r] : 0);
-                                break;
-                            case ColumnType.TypeFloat:
-                                sb.Append((r < cd.FloatValues.Count ? cd.FloatValues[r] : 0f)
-                                    .ToString(System.Globalization.CultureInfo.InvariantCulture));
-                                break;
-                            case ColumnType.TypeDouble:
-                            case ColumnType.TypeDecimal:
-                                sb.Append((r < cd.DoubleValues.Count ? cd.DoubleValues[r] : 0d)
-                                    .ToString(System.Globalization.CultureInfo.InvariantCulture));
-                                break;
-                            default:
-                                sb.Append("'");
-                                string val = r < cd.StringValues.Count ? cd.StringValues[r] : "";
-                                sb.Append(val.Replace("'", "''"));
-                                sb.Append("'");
-                                break;
-                        }
-                    }
-                    sb.Append(")");
-                }
-
-                // Write: fan-out to ALL shards
-                var result = shardedDb.WriteToAll(sb.ToString());
+                string sql = BulkInsertSqlBuilder.Build(table, request.Columns, request.Data, rowCount);
+                var result = shardedDb.WriteToAll(sql);
                 if (!result.Ok)
                 {
                     Interlocked.Increment(ref errors);
-                    return Task.FromResult(new BulkInsertResponse
-                    {
-                        Success = false,
-                        Error = result.Error
-                    });
+                    return Task.FromResult(new BulkInsertResponse { Success = false, Error = result.Error });
                 }
 
                 queryCache.Invalidate();
                 Interlocked.Increment(ref queriesWrite);
                 return Task.FromResult(new BulkInsertResponse
-                {
-                    Success = true,
-                    RowsInserted = rowCount
-                });
+                    { Success = true, RowsInserted = rowCount });
             }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref errors);
-                return Task.FromResult(new BulkInsertResponse
-                {
-                    Success = false,
-                    Error = ex.Message
-                });
+                return Task.FromResult(new BulkInsertResponse { Success = false, Error = ex.Message });
             }
         }
 
+        // ── Ping / GetStats ──────────────────────────────────────────────────
+
+        public override Task<PingResponse> Ping(PingRequest request, ServerCallContext context)
+        {
+            return Task.FromResult(new PingResponse { Message = "pong" });
+        }
+
+        public override Task<StatsResponse> GetStats(StatsRequest request, ServerCallContext context)
+        {
+            return Task.FromResult(new StatsResponse
+            {
+                QueriesRead = Interlocked.Read(ref queriesRead),
+                QueriesWrite = Interlocked.Read(ref queriesWrite),
+                Errors = Interlocked.Read(ref errors),
+                ReaderPoolSize = shardedDb.TotalPoolSize,
+                Port = config.Port
+            });
+        }
+
+        // ── Dispose ──────────────────────────────────────────────────────────
+
         private int disposed;
+
         public void Dispose()
         {
             if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
             shardedDb.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Builds a multi-row INSERT SQL statement from columnar protobuf data.
+    /// </summary>
+    internal static class BulkInsertSqlBuilder
+    {
+        public static string Build(
+            string table,
+            Google.Protobuf.Collections.RepeatedField<ColumnMeta> columns,
+            Google.Protobuf.Collections.RepeatedField<ColumnData> data,
+            int rowCount)
+        {
+            int colCount = columns.Count;
+            var sb = new System.Text.StringBuilder(rowCount * colCount * 10);
+
+            for (int r = 0; r < rowCount; r++)
+            {
+                sb.Append(r == 0 ? "INSERT INTO " + table + " VALUES (" : ", (");
+
+                for (int c = 0; c < colCount; c++)
+                {
+                    if (c > 0) sb.Append(", ");
+                    var cd = data[c];
+                    bool isNull = false;
+                    for (int n = 0; n < cd.NullIndices.Count; n++)
+                        if (cd.NullIndices[n] == r) { isNull = true; break; }
+
+                    if (isNull) { sb.Append("NULL"); continue; }
+
+                    switch (columns[c].Type)
+                    {
+                        case ColumnType.TypeBoolean:
+                            sb.Append(r < cd.BoolValues.Count && cd.BoolValues[r] ? "true" : "false"); break;
+                        case ColumnType.TypeInt32: case ColumnType.TypeInt8:
+                        case ColumnType.TypeInt16: case ColumnType.TypeUint8:
+                        case ColumnType.TypeUint16:
+                            sb.Append(r < cd.Int32Values.Count ? cd.Int32Values[r] : 0); break;
+                        case ColumnType.TypeInt64: case ColumnType.TypeUint32:
+                        case ColumnType.TypeUint64:
+                            sb.Append(r < cd.Int64Values.Count ? cd.Int64Values[r] : 0); break;
+                        case ColumnType.TypeFloat:
+                            sb.Append((r < cd.FloatValues.Count ? cd.FloatValues[r] : 0f)
+                                .ToString(System.Globalization.CultureInfo.InvariantCulture)); break;
+                        case ColumnType.TypeDouble: case ColumnType.TypeDecimal:
+                            sb.Append((r < cd.DoubleValues.Count ? cd.DoubleValues[r] : 0d)
+                                .ToString(System.Globalization.CultureInfo.InvariantCulture)); break;
+                        default:
+                            sb.Append("'");
+                            sb.Append(r < cd.StringValues.Count ? cd.StringValues[r].Replace("'", "''") : "");
+                            sb.Append("'"); break;
+                    }
+                }
+                sb.Append(")");
+            }
+
+            return sb.ToString();
         }
     }
 }
