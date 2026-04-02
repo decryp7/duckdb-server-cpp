@@ -1,7 +1,7 @@
 //! Write serializer: batches concurrent DML into single transactions.
 
-use crate::pool::DuckDbPool;
 use crate::proto::{ColumnData, ColumnMeta};
+use duckdb::Connection;
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
@@ -14,23 +14,28 @@ struct WriteRequest {
 
 pub struct WriteSerializer {
     request_tx: Mutex<mpsc::Sender<WriteRequest>>,
-    pool: DuckDbPool,
+    bulk_conn: Mutex<Connection>,
     _writer_thread: thread::JoinHandle<()>,
 }
 
 impl WriteSerializer {
-    pub fn new(pool: DuckDbPool, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
-        let writer_pool = pool.clone();
+    /// Create a writer. `source_conn` is cloned for the writer's own connections.
+    pub fn from_conn(source_conn: &Connection, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
+        let write_conn = source_conn.try_clone()
+            .map_err(|e| format!("Writer clone failed: {}", e))?;
+        let bulk_conn = source_conn.try_clone()
+            .map_err(|e| format!("Bulk clone failed: {}", e))?;
+
         let (tx, rx) = mpsc::channel::<WriteRequest>();
 
         let handle = thread::Builder::new()
             .name("duckdb-writer".into())
-            .spawn(move || { drain_loop(writer_pool, rx, batch_ms, batch_max); })
+            .spawn(move || { drain_loop(write_conn, rx, batch_ms, batch_max); })
             .map_err(|e| format!("Writer thread failed: {}", e))?;
 
         Ok(Self {
             request_tx: Mutex::new(tx),
-            pool,
+            bulk_conn: Mutex::new(bulk_conn),
             _writer_thread: handle,
         })
     }
@@ -44,14 +49,10 @@ impl WriteSerializer {
             .map_err(|_| "Write timed out".to_string())?
     }
 
-    pub fn bulk_insert(
-        &self, table: &str, _columns: &[ColumnMeta],
-        data: &[ColumnData], row_count: usize,
-    ) -> Result<usize, String> {
-        let conn = self.pool.get().map_err(|e| format!("Pool error: {}", e))?;
+    pub fn bulk_insert(&self, table: &str, _columns: &[ColumnMeta], data: &[ColumnData], row_count: usize) -> Result<usize, String> {
+        let conn = self.bulk_conn.lock().unwrap();
         let col_count = data.len();
         if col_count == 0 || row_count == 0 { return Ok(0); }
-
         let mut sql = format!("INSERT INTO {} VALUES ", table);
         for r in 0..row_count {
             if r > 0 { sql.push_str(", "); }
@@ -59,16 +60,13 @@ impl WriteSerializer {
             for c in 0..col_count {
                 if c > 0 { sql.push_str(", "); }
                 let cd = &data[c];
-                let is_null = cd.null_indices.contains(&(r as i32));
-                if is_null { sql.push_str("NULL"); }
+                if cd.null_indices.contains(&(r as i32)) { sql.push_str("NULL"); }
                 else if r < cd.int32_values.len() { sql.push_str(&cd.int32_values[r].to_string()); }
                 else if r < cd.int64_values.len() { sql.push_str(&cd.int64_values[r].to_string()); }
                 else if r < cd.double_values.len() { sql.push_str(&cd.double_values[r].to_string()); }
                 else if r < cd.bool_values.len() { sql.push_str(if cd.bool_values[r] { "true" } else { "false" }); }
                 else if r < cd.string_values.len() {
-                    sql.push('\'');
-                    sql.push_str(&cd.string_values[r].replace('\'', "''"));
-                    sql.push('\'');
+                    sql.push('\''); sql.push_str(&cd.string_values[r].replace('\'', "''")); sql.push('\'');
                 } else { sql.push_str("NULL"); }
             }
             sql.push(')');
@@ -78,7 +76,7 @@ impl WriteSerializer {
     }
 }
 
-fn drain_loop(pool: DuckDbPool, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64, batch_max: usize) {
+fn drain_loop(conn: Connection, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64, batch_max: usize) {
     loop {
         let first = match rx.recv() { Ok(r) => r, Err(_) => return };
         let mut batch = vec![first];
@@ -86,27 +84,16 @@ fn drain_loop(pool: DuckDbPool, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64,
         while batch.len() < batch_max {
             let timeout = deadline.saturating_duration_since(std::time::Instant::now());
             if timeout.is_zero() { break; }
-            match rx.recv_timeout(timeout) {
-                Ok(req) => batch.push(req),
-                Err(_) => break,
-            }
+            match rx.recv_timeout(timeout) { Ok(req) => batch.push(req), Err(_) => break }
         }
-
-        let conn = match pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                for req in &batch { let _ = req.result_tx.send(Err(e.to_string())); }
-                continue;
-            }
-        };
 
         if conn.execute_batch("BEGIN").is_err() {
             for req in &batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
             continue;
         }
-        let mut all_ok = true;
-        for req in &batch { if conn.execute_batch(&req.sql).is_err() { all_ok = false; break; } }
-        if !all_ok {
+        let mut ok = true;
+        for req in &batch { if conn.execute_batch(&req.sql).is_err() { ok = false; break; } }
+        if !ok {
             let _ = conn.execute_batch("ROLLBACK");
             for req in &batch { let _ = req.result_tx.send(conn.execute_batch(&req.sql).map_err(|e| e.to_string())); }
             continue;

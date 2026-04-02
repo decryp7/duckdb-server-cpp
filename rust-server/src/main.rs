@@ -1,13 +1,13 @@
 //! DuckDB gRPC Server — Rust edition (extreme performance)
 //!
-//! Uses r2d2 connection pool for true concurrent reads.
+//! Uses Connection::try_clone() pool for true concurrent reads.
 //! Same proto/duckdb_service.proto as C# and C++ servers.
 
 mod pool;
 mod writer;
 
 use clap::Parser;
-use pool::{create_pool, DuckDbPool};
+use pool::ConnectionPool;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tonic::{transport::Server, Request, Response, Status};
@@ -40,7 +40,7 @@ struct Args {
 }
 
 struct DuckDbServerImpl {
-    pool: DuckDbPool,
+    pool: Arc<ConnectionPool>,
     writer: Arc<WriteSerializer>,
     batch_size: usize,
     port: u16,
@@ -62,7 +62,7 @@ impl DuckDbService for DuckDbServerImpl {
         let (tx, rx) = tokio::sync::mpsc::channel(4);
 
         tokio::task::spawn_blocking(move || {
-            let conn = match pool.get() {
+            let conn = match pool.borrow() {
                 Ok(c) => c,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
@@ -192,7 +192,7 @@ impl DuckDbService for DuckDbServerImpl {
             queries_read: self.stat_reads.load(Ordering::Relaxed),
             queries_write: self.stat_writes.load(Ordering::Relaxed),
             errors: self.stat_errors.load(Ordering::Relaxed),
-            reader_pool_size: self.pool.state().idle_connections as i32,
+            reader_pool_size: self.pool.size() as i32,
             port: self.port as i32,
         }))
     }
@@ -222,17 +222,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let readers = if args.readers == 0 { num_cpus::get() * 2 } else { args.readers };
 
-    let pool = create_pool(&args.db, readers)?;
+    let pool = Arc::new(ConnectionPool::new(&args.db, readers)?);
 
     // Apply DuckDB tuning
     {
-        let conn = pool.get().map_err(|e| e.to_string())?;
+        let conn = pool.borrow().map_err(|e| e)?;
         let _ = conn.execute_batch("PRAGMA enable_object_cache");
         let _ = conn.execute_batch("SET preserve_insertion_order=false");
         let _ = conn.execute_batch("SET checkpoint_threshold='256MB'");
     }
 
-    let writer = Arc::new(WriteSerializer::new(pool.clone(), args.batch_ms, args.batch_max)?);
+    // Writer gets its own cloned connections
+    let writer = {
+        let conn = pool.borrow().map_err(|e| e)?;
+        Arc::new(WriteSerializer::from_conn(&conn, args.batch_ms, args.batch_max)?)
+    };
 
     let server_impl = DuckDbServerImpl {
         pool: pool.clone(),
@@ -246,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = format!("{}:{}", args.host, args.port).parse()?;
 
-    println!("[das] DuckDB gRPC Server v5.0.0 (Rust + r2d2 pool)");
+    println!("[das] DuckDB gRPC Server v5.0.0 (Rust + try_clone pool)");
     println!("      address  = {}", addr);
     println!("      readers  = {}", readers);
     println!("      db       = {}", args.db);
