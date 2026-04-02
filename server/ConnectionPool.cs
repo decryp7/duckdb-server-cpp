@@ -95,7 +95,13 @@ namespace DuckDbServer
             try
             {
                 for (int i = 0; i < count; i++)
-                    idle.Add(dbManager.CreateConnection());
+                {
+                    var conn = dbManager.CreateConnection();
+                    // Apply performance PRAGMAs on EVERY connection (not just primary).
+                    // DuckDB settings are per-connection, not inherited from cache=shared.
+                    ApplyConnectionPragmas(conn);
+                    idle.Add(conn);
+                }
             }
             catch
             {
@@ -104,6 +110,36 @@ namespace DuckDbServer
                     SafeDispose(conn);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Apply performance settings on each pool connection.
+        /// These are per-connection settings that improve query throughput:
+        ///   - threads=1: eliminates internal thread contention (pool provides parallelism)
+        ///   - preserve_insertion_order=false: 1.5-3x faster scans without ORDER BY
+        ///   - enable_object_cache: caches Parquet/table metadata
+        /// </summary>
+        private static void ApplyConnectionPragmas(DuckDBConnection conn)
+        {
+            try
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SET threads=1";
+                    cmd.ExecuteNonQuery();
+                }
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SET preserve_insertion_order=false";
+                    cmd.ExecuteNonQuery();
+                }
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "PRAGMA enable_object_cache";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch { /* best-effort — PRAGMAs are optimization hints */ }
         }
 
         private void ReturnConnection(DuckDBConnection conn)
