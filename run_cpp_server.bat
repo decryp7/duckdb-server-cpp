@@ -28,7 +28,16 @@ echo  DuckDB gRPC Server (C++) — High Performance Mode
 echo  ==================================================
 echo.
 
-cpp\bin\Debug\DuckDbServerCpp.exe ^
+if exist "cpp\bin\Release\DuckDbServerCpp.exe" (
+    set EXE=cpp\bin\Release\DuckDbServerCpp.exe
+) else if exist "cpp\bin\Debug\DuckDbServerCpp.exe" (
+    set EXE=cpp\bin\Debug\DuckDbServerCpp.exe
+) else (
+    echo ERROR: DuckDbServerCpp.exe not found. Build the C++ project first.
+    exit /b 1
+)
+
+%EXE% ^
     --port 17777 ^
     --readers 64 ^
     --batch-ms 50 ^
