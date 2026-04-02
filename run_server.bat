@@ -6,9 +6,10 @@ REM  This script starts the C# DuckDB gRPC server with settings optimized
 REM  for maximum concurrent read and write throughput.
 REM
 REM  Configuration:
-REM    --db :memory:       In-memory database (fastest, no disk I/O)
-REM                        Change to a file path for persistence:
-REM                        --db C:\data\analytics.duckdb
+REM    --db data.duckdb    File-based database for persistence.
+REM                        Data survives server restarts.
+REM                        Change to :memory: for fastest performance
+REM                        (no disk I/O, but data lost on restart).
 REM
 REM    --port 17777        Default gRPC listen port
 REM
@@ -66,6 +67,7 @@ echo  ============================================
 echo.
 
 server\bin\Debug\DuckArrowServer.exe ^
+    --db data.duckdb ^
     --port 17777 ^
     --readers 64 ^
     --batch-ms 50 ^
