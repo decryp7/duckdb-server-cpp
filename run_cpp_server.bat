@@ -38,6 +38,7 @@ if exist "cpp\bin\Release\DuckDbServerCpp.exe" (
 )
 
 %EXE% ^
+    --db data.duckdb ^
     --port 17777 ^
     --readers 64 ^
     --batch-ms 50 ^
