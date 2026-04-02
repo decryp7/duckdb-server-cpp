@@ -15,6 +15,10 @@ namespace DuckArrowServer
 
         static int Main(string[] args)
         {
+            // Must be set BEFORE any gRPC object is created.
+            GrpcEnvironment.SetThreadPoolSize(Environment.ProcessorCount * 2);
+            GrpcEnvironment.SetCompletionQueueCount(Environment.ProcessorCount);
+
             // Step 1: Parse command-line arguments into config.
             var config = ParseArguments(args);
             if (config == null) return 1; // error already printed
@@ -79,10 +83,6 @@ namespace DuckArrowServer
                     Services = { flightServer.BuildGrpcService() },
                     Ports = { new ServerPort(config.Host, config.Port, credentials) }
                 };
-
-                // Grpc.Core thread pool tuning
-                GrpcEnvironment.SetThreadPoolSize(Environment.ProcessorCount * 2);
-                GrpcEnvironment.SetCompletionQueueCount(Environment.ProcessorCount);
 
                 grpcServer.Start();
 
