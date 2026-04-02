@@ -80,6 +80,12 @@
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\shared\DuckDbShared.csproj">
+      <Project>{E5F6A7B8-C9D0-1234-EFAB-CDEF01234567}</Project>
+      <Name>DuckDbShared</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- Auto-copy native DLLs to output directory after build -->
   <Target Name="CopyNativeDlls" AfterTargets="Build">

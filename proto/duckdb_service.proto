@@ -1,0 +1,94 @@
+// DuckDB Arrow Flight Server — Custom gRPC Protocol
+//
+// This proto defines the RPC surface for the DuckDB server.
+// It replaces Apache Arrow Flight for .NET Framework 4.6.2 compatibility.
+//
+// Why not Arrow Flight?
+//   Arrow Flight's .NET FlightClient/FlightServer require Grpc.Net.Client
+//   which needs .NET 5+. On .NET Framework 4.6.2 with Grpc.Core, the
+//   Flight protocol types are internal and inaccessible.
+//
+// Data format:
+//   Query results are streamed as Apache Arrow IPC bytes inside protobuf
+//   messages. The client uses Apache.Arrow.Ipc.ArrowStreamReader to parse
+//   them. This gives columnar performance without depending on the Arrow
+//   Flight wire format.
+//
+// Cross-language:
+//   Any language with gRPC + protobuf codegen can generate a client from
+//   this proto file (C++, Python, Java, Go, Rust, etc.).
+
+syntax = "proto3";
+
+package duckdb.v1;
+
+option csharp_namespace = "DuckDbProto";
+
+// The DuckDB query service.
+service DuckDbService {
+
+  // Execute a SELECT query and stream results as Arrow IPC batches.
+  // The first response contains the Arrow IPC stream header (schema).
+  // Subsequent responses contain record batch chunks.
+  rpc Query (QueryRequest) returns (stream QueryResponse);
+
+  // Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE, DROP, ...).
+  // Blocks until the statement's transaction commits.
+  rpc Execute (ExecuteRequest) returns (ExecuteResponse);
+
+  // Liveness check.
+  rpc Ping (PingRequest) returns (PingResponse);
+
+  // Live server metrics.
+  rpc GetStats (StatsRequest) returns (StatsResponse);
+}
+
+// ── Query ────────────────────────────────────────────────────────────────────
+
+message QueryRequest {
+  // UTF-8 SELECT / WITH / EXPLAIN / SHOW SQL statement.
+  string sql = 1;
+}
+
+message QueryResponse {
+  // A chunk of Arrow IPC stream bytes.
+  // The full result is the concatenation of all chunks' ipc_data fields,
+  // which forms a valid Arrow IPC stream readable by ArrowStreamReader.
+  bytes ipc_data = 1;
+}
+
+// ── Execute ──────────────────────────────────────────────────────────────────
+
+message ExecuteRequest {
+  // UTF-8 DML or DDL SQL statement.
+  string sql = 1;
+}
+
+message ExecuteResponse {
+  // True if the statement executed successfully.
+  bool success = 1;
+
+  // Non-empty error message on failure.
+  string error = 2;
+}
+
+// ── Ping ─────────────────────────────────────────────────────────────────────
+
+message PingRequest {}
+
+message PingResponse {
+  // Always "pong".
+  string message = 1;
+}
+
+// ── Stats ────────────────────────────────────────────────────────────────────
+
+message StatsRequest {}
+
+message StatsResponse {
+  int64 queries_read = 1;
+  int64 queries_write = 2;
+  int64 errors = 3;
+  int32 reader_pool_size = 4;
+  int32 port = 5;
+}

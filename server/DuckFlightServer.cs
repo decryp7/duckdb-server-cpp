@@ -1,28 +1,20 @@
 using System;
-using System.Collections.Generic;
-using System.Text;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
+using Apache.Arrow.Ipc;
+using DuckDbProto;
 using Grpc.Core;
 
 namespace DuckArrowServer
 {
     /// <summary>
-    /// Arrow Flight server backed by a DuckDB database.
-    /// Uses raw gRPC with manual proto encoding/decoding because
-    /// Apache.Arrow.Flight.Protocol types are internal in the NuGet package.
+    /// DuckDB gRPC server using the custom DuckDbService protocol.
+    /// Uses Arrow IPC for streaming query results.
     ///
-    /// IMPORTANT: The IPC serialization embeds full Arrow IPC streams inside
-    /// FlightData.data_header (not individual IPC messages). This means the C#
-    /// server is compatible with the C# client (DasFlightClient) but NOT with
-    /// standard Flight clients (Python pyarrow.flight, C++ Arrow Flight, etc.).
-    /// For cross-language interop, use the C++ server instead.
-    ///
-    /// Handles three types of requests:
-    ///   - DoGet:   Run a SELECT query and stream Arrow batches to the client.
-    ///   - DoAction: Run a command (execute SQL, ping, or get stats).
-    ///   - ListActions: Tell the client what actions are available.
+    /// Compatible with any client generated from proto/duckdb_service.proto
+    /// (C#, C++, Python, Go, Java, etc.).
     /// </summary>
     public sealed class DuckFlightServer : IDisposable
     {
@@ -44,7 +36,19 @@ namespace DuckArrowServer
             this.batchSize = config.BatchSize > 0 ? config.BatchSize : 8192;
         }
 
-        /// <summary>Get a snapshot of live server metrics.</summary>
+        /// <summary>
+        /// Create the gRPC ServerServiceDefinition using typed marshallers.
+        /// </summary>
+        public ServerServiceDefinition BuildGrpcService()
+        {
+            return ServerServiceDefinition.CreateBuilder()
+                .AddMethod(DuckDbService.QueryMethod, HandleQuery)
+                .AddMethod(DuckDbService.ExecuteMethod, HandleExecute)
+                .AddMethod(DuckDbService.PingMethod, HandlePing)
+                .AddMethod(DuckDbService.StatsMethod, HandleGetStats)
+                .Build();
+        }
+
         public ServerStats GetStats()
         {
             return new ServerStats
@@ -57,56 +61,14 @@ namespace DuckArrowServer
             };
         }
 
-        /// <summary>
-        /// Create the gRPC ServerServiceDefinition for Grpc.Core hosting.
-        /// Maps Flight proto RPCs to our handler methods.
-        /// </summary>
-        public ServerServiceDefinition BuildGrpcService()
-        {
-            var builder = ServerServiceDefinition.CreateBuilder();
+        // ── Query: stream Arrow IPC results ──────────────────────────────────
 
-            builder.AddMethod(
-                new Method<byte[], byte[]>(
-                    MethodType.ServerStreaming,
-                    "arrow.flight.protocol.FlightService",
-                    "DoGet",
-                    RawMarshaller, RawMarshaller),
-                HandleDoGet);
-
-            builder.AddMethod(
-                new Method<byte[], byte[]>(
-                    MethodType.ServerStreaming,
-                    "arrow.flight.protocol.FlightService",
-                    "DoAction",
-                    RawMarshaller, RawMarshaller),
-                HandleDoAction);
-
-            builder.AddMethod(
-                new Method<byte[], byte[]>(
-                    MethodType.ServerStreaming,
-                    "arrow.flight.protocol.FlightService",
-                    "ListActions",
-                    RawMarshaller, RawMarshaller),
-                HandleListActions);
-
-            return builder.Build();
-        }
-
-        private static readonly Marshaller<byte[]> RawMarshaller = new Marshaller<byte[]>(
-            bytes => bytes,
-            bytes => bytes);
-
-        // ── DoGet: Read queries ──────────────────────────────────────────────
-
-        private async Task HandleDoGet(
-            byte[] request,
-            IServerStreamWriter<byte[]> responseStream,
+        private async Task HandleQuery(
+            QueryRequest request,
+            IServerStreamWriter<QueryResponse> responseStream,
             ServerCallContext context)
         {
-            var ticket = FlightProto.ParseTicket(request);
-            string sql = ticket.TicketBytes != null
-                ? Encoding.UTF8.GetString(ticket.TicketBytes)
-                : "";
+            string sql = request.Sql ?? "";
 
             try
             {
@@ -118,24 +80,52 @@ namespace DuckArrowServer
                     {
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
-                        // Send schema as the first message.
-                        byte[] schemaIpc = SerializeSchemaIpc(schema);
-                        await responseStream.WriteAsync(
-                            FlightProto.WriteFlightData(schemaIpc)).ConfigureAwait(false);
-
-                        // Stream data batches.
-                        RecordBatch batch;
-                        while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
+                        // Write the entire result as an Arrow IPC stream.
+                        // Each QueryResponse chunk contains a piece of the IPC stream.
+                        using (var ms = new MemoryStream())
                         {
-                            try
+                            var ipcWriter = new ArrowStreamWriter(ms, schema, leaveOpen: true);
+
+                            // Write schema.
+                            await ipcWriter.WriteStartAsync().ConfigureAwait(false);
+
+                            // Write batches.
+                            RecordBatch batch;
+                            while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
                             {
-                                byte[] batchIpc = SerializeBatchIpc(batch, schema);
-                                await responseStream.WriteAsync(
-                                    FlightProto.WriteFlightData(batchIpc)).ConfigureAwait(false);
+                                try
+                                {
+                                    await ipcWriter.WriteRecordBatchAsync(batch).ConfigureAwait(false);
+                                }
+                                finally
+                                {
+                                    batch.Dispose();
+                                }
+
+                                // Flush what we have so far as a chunk.
+                                await ipcWriter.WriteEndAsync().ConfigureAwait(false);
+                                ipcWriter.Dispose();
+
+                                byte[] chunk = ms.ToArray();
+                                ms.SetLength(0);
+
+                                await responseStream.WriteAsync(new QueryResponse { IpcData = chunk })
+                                    .ConfigureAwait(false);
+
+                                // Start a new IPC stream for the next chunk.
+                                ipcWriter = new ArrowStreamWriter(ms, schema, leaveOpen: true);
+                                await ipcWriter.WriteStartAsync().ConfigureAwait(false);
                             }
-                            finally
+
+                            // Final empty stream (schema only) for queries with no remaining batches.
+                            await ipcWriter.WriteEndAsync().ConfigureAwait(false);
+                            ipcWriter.Dispose();
+
+                            byte[] finalChunk = ms.ToArray();
+                            if (finalChunk.Length > 0)
                             {
-                                batch.Dispose();
+                                await responseStream.WriteAsync(new QueryResponse { IpcData = finalChunk })
+                                    .ConfigureAwait(false);
                             }
                         }
                     }
@@ -154,103 +144,57 @@ namespace DuckArrowServer
             }
         }
 
-        // ── DoAction: Execute / Ping / Stats ─────────────────────────────────
+        // ── Execute: DML/DDL ─────────────────────────────────────────────────
 
-        private async Task HandleDoAction(
-            byte[] request,
-            IServerStreamWriter<byte[]> responseStream,
-            ServerCallContext context)
+        private Task<ExecuteResponse> HandleExecute(ExecuteRequest request, ServerCallContext context)
         {
-            var action = FlightProto.ParseAction(request);
-            string actionType = action.Type ?? "";
+            string sql = request.Sql;
 
-            if (actionType == "execute")
+            if (string.IsNullOrEmpty(sql))
             {
-                if (action.Body == null || action.Body.Length == 0)
+                Interlocked.Increment(ref errors);
+                return Task.FromResult(new ExecuteResponse
                 {
-                    Interlocked.Increment(ref errors);
-                    throw new RpcException(new Status(StatusCode.InvalidArgument,
-                        "execute action requires a non-empty SQL body"));
-                }
+                    Success = false,
+                    Error = "SQL statement is required"
+                });
+            }
 
-                string sql = Encoding.UTF8.GetString(action.Body);
-                var result = writer.Submit(sql);
-                if (!result.Ok)
+            var result = writer.Submit(sql);
+            if (!result.Ok)
+            {
+                Interlocked.Increment(ref errors);
+                return Task.FromResult(new ExecuteResponse
                 {
-                    Interlocked.Increment(ref errors);
-                    throw new RpcException(new Status(StatusCode.Internal, result.Error));
-                }
-
-                Interlocked.Increment(ref queriesWrite);
-                return;
+                    Success = false,
+                    Error = result.Error
+                });
             }
 
-            if (actionType == "ping")
-            {
-                byte[] pongBytes = Encoding.UTF8.GetBytes("pong");
-                await responseStream.WriteAsync(
-                    FlightProto.WriteResult(pongBytes)).ConfigureAwait(false);
-                return;
-            }
-
-            if (actionType == "stats")
-            {
-                var s = GetStats();
-                string json = string.Format(
-                    "{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2}," +
-                    "\"reader_pool_size\":{3},\"port\":{4}}}",
-                    s.QueriesRead, s.QueriesWrite, s.Errors, s.ReaderPoolSize, s.Port);
-                byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
-                await responseStream.WriteAsync(
-                    FlightProto.WriteResult(jsonBytes)).ConfigureAwait(false);
-                return;
-            }
-
-            throw new RpcException(new Status(StatusCode.Unimplemented,
-                "Unknown action '" + actionType + "'. Supported: execute, ping, stats."));
+            Interlocked.Increment(ref queriesWrite);
+            return Task.FromResult(new ExecuteResponse { Success = true });
         }
 
-        // ── ListActions ──────────────────────────────────────────────────────
+        // ── Ping ─────────────────────────────────────────────────────────────
 
-        private async Task HandleListActions(
-            byte[] request,
-            IServerStreamWriter<byte[]> responseStream,
-            ServerCallContext context)
+        private Task<PingResponse> HandlePing(PingRequest request, ServerCallContext context)
         {
-            await responseStream.WriteAsync(FlightProto.WriteActionType("execute",
-                "Execute DML or DDL SQL. Body = UTF-8 SQL. Returns empty stream on success."))
-                .ConfigureAwait(false);
-            await responseStream.WriteAsync(FlightProto.WriteActionType("ping",
-                "Liveness check. Returns 'pong'."))
-                .ConfigureAwait(false);
-            await responseStream.WriteAsync(FlightProto.WriteActionType("stats",
-                "Server metrics as JSON."))
-                .ConfigureAwait(false);
+            return Task.FromResult(new PingResponse { Message = "pong" });
         }
 
-        // ── IPC serialization ────────────────────────────────────────────────
+        // ── Stats ────────────────────────────────────────────────────────────
 
-        private static byte[] SerializeSchemaIpc(Schema schema)
+        private Task<StatsResponse> HandleGetStats(StatsRequest request, ServerCallContext context)
         {
-            using (var ms = new System.IO.MemoryStream())
+            var s = GetStats();
+            return Task.FromResult(new StatsResponse
             {
-                var w = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
-                w.WriteStartAsync().Wait();
-                w.WriteEndAsync().Wait();
-                w.Dispose();
-                return ms.ToArray();
-            }
-        }
-
-        private static byte[] SerializeBatchIpc(RecordBatch batch, Schema schema)
-        {
-            using (var ms = new System.IO.MemoryStream())
-            {
-                var w = new Apache.Arrow.Ipc.ArrowStreamWriter(ms, schema, leaveOpen: true);
-                w.WriteRecordBatchAsync(batch).Wait();
-                w.Dispose();
-                return ms.ToArray();
-            }
+                QueriesRead = s.QueriesRead,
+                QueriesWrite = s.QueriesWrite,
+                Errors = s.Errors,
+                ReaderPoolSize = s.ReaderPoolSize,
+                Port = s.Port
+            });
         }
 
         // ── Dispose ──────────────────────────────────────────────────────────
