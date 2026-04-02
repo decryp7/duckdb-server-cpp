@@ -36,19 +36,26 @@ namespace DuckDbBenchmark
             }
 
             Console.WriteLine("==========================================================================");
-            Console.WriteLine("  DuckDB gRPC Server — Performance Benchmark");
+            Console.WriteLine("  DuckDB gRPC Server v5.0 — Performance Benchmark");
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
             Console.WriteLine("  Target server  : {0}:{1}", host, port);
             Console.WriteLine("  Mode           : {0}", full ? "FULL (all tests + max concurrency + sustained)" : quick ? "QUICK (smoke test)" : "STANDARD");
-            Console.WriteLine("  Protocol       : gRPC over gRPC / HTTP/2");
+            Console.WriteLine("  Protocol       : custom gRPC (proto/duckdb_service.proto)");
+            Console.WriteLine("  Encoding       : columnar protobuf (packed arrays per column)");
             Console.WriteLine("  Client         : single shared DuckDbClient (HTTP/2 multiplexing)");
             Console.WriteLine();
+            Console.WriteLine("  Server features:");
+            Console.WriteLine("    - Sharding:    N independent DuckDB instances (read-all/write-all)");
+            Console.WriteLine("    - Caching:     LRU query cache with TTL (cache hit = 0.1ms)");
+            Console.WriteLine("    - Batching:    concurrent writes batched into transactions");
+            Console.WriteLine("    - DuckDB:      threads=1/conn, preserve_insertion_order=false");
+            Console.WriteLine();
             Console.WriteLine("  What is measured:");
-            Console.WriteLine("    - Throughput: operations per second (higher = better)");
-            Console.WriteLine("    - Latency:   time per operation in ms (lower = better)");
+            Console.WriteLine("    - Throughput:  operations per second (higher = better)");
+            Console.WriteLine("    - Latency:     time per operation in ms (lower = better)");
             Console.WriteLine("    - P50/P95/P99: percentile latencies (tail latency)");
-            Console.WriteLine("    - Errors:    failed operations (should be 0)");
+            Console.WriteLine("    - Errors:      failed operations (should be 0)");
             Console.WriteLine();
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
