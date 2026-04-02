@@ -79,6 +79,7 @@
     <Compile Include="InsertBatcher.cs" />
     <Compile Include="ServerConfig.cs" />
     <Compile Include="ShardedDuckDb.cs" />
+    <Compile Include="QueryCache.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

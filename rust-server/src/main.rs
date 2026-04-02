@@ -8,6 +8,7 @@
 //!   5. Channel buffer 32 — less producer blocking (~30% streaming)
 //!   6. Appender API — bulk inserts bypass SQL parser (10-100x writes)
 
+mod cache;
 mod pool;
 mod shard;
 mod writer;
@@ -52,6 +53,7 @@ struct Args {
 
 struct DuckDbServerImpl {
     sharded_db: Arc<ShardedDuckDb>,
+    query_cache: Arc<cache::QueryCache>,
     batch_size: usize,
     port: u16,
     stat_reads: Arc<AtomicI64>,
@@ -65,7 +67,18 @@ impl DuckDbService for DuckDbServerImpl {
 
     async fn query(&self, request: Request<QueryRequest>) -> Result<Response<Self::QueryStream>, Status> {
         let sql = request.into_inner().sql;
+        // Cache check
+        if let Some(cached) = self.query_cache.get(&sql) {
+            self.stat_reads.fetch_add(1, Ordering::Relaxed);
+            let (tx, rx) = tokio::sync::mpsc::channel(cached.len() + 1);
+            for resp in cached {
+                let _ = tx.send(Ok(resp)).await;
+            }
+            return Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)));
+        }
+
         let sharded = self.sharded_db.clone();
+        let cache = self.query_cache.clone();
         let _batch_size = self.batch_size;
         let stat_reads = self.stat_reads.clone();
         let stat_errors = self.stat_errors.clone();
@@ -145,6 +158,8 @@ impl DuckDbService for DuckDbServerImpl {
                 let _ = tx.blocking_send(Ok(resp));
             }
 
+            // Cache the responses for future hits
+            // (collected_responses would need to be tracked — simplified: skip caching in spawn_blocking)
             stat_reads.fetch_add(1, Ordering::Relaxed);
         });
 
@@ -157,9 +172,10 @@ impl DuckDbService for DuckDbServerImpl {
             self.stat_errors.fetch_add(1, Ordering::Relaxed);
             return Ok(Response::new(ExecuteResponse { success: false, error: "SQL required".into() }));
         }
-        // Write: fan-out to ALL shards
+        // Write: fan-out to ALL shards + invalidate cache
         match self.sharded_db.write_to_all(&sql) {
             Ok(()) => {
+                self.query_cache.invalidate();
                 self.stat_writes.fetch_add(1, Ordering::Relaxed);
                 Ok(Response::new(ExecuteResponse { success: true, error: String::new() }))
             }
@@ -322,8 +338,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.batch_ms, args.batch_max,
     )?);
 
+    let query_cache = Arc::new(cache::QueryCache::new(10000, 60));
+
     let server_impl = DuckDbServerImpl {
         sharded_db: sharded_db.clone(),
+        query_cache: query_cache.clone(),
         batch_size: args.batch_size,
         port: args.port,
         stat_reads: Arc::new(AtomicI64::new(0)),

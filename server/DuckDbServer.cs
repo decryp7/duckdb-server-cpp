@@ -18,10 +18,12 @@ namespace DuckDbServer
     {
         private readonly ServerConfig config;
         private readonly ShardedDuckDb shardedDb;
+        private readonly QueryCache queryCache;
 
         private long queriesRead;
         private long queriesWrite;
         private long errors;
+        private long cacheHits;
 
         private readonly int batchSize;
 
@@ -32,6 +34,7 @@ namespace DuckDbServer
         {
             this.config = config;
             this.shardedDb = shardedDb;
+            this.queryCache = new QueryCache(maxEntries: 10000, ttlSeconds: 60);
             this.batchSize = config.BatchSize > 0 ? config.BatchSize : 8192;
         }
 
@@ -61,9 +64,19 @@ namespace DuckDbServer
         {
             string sql = request.Sql ?? "";
 
+            // Cache check: if this exact SQL was recently executed, return cached result
+            System.Collections.Generic.List<QueryResponse> cached;
+            if (queryCache.TryGet(sql, out cached))
+            {
+                Interlocked.Increment(ref cacheHits);
+                Interlocked.Increment(ref queriesRead);
+                foreach (var resp in cached)
+                    await responseStream.WriteAsync(resp).ConfigureAwait(false);
+                return;
+            }
+
             try
             {
-                // Read: round-robin across all shards (each has full data copy)
                 var shard = shardedDb.NextForRead();
                 using (var handle = shard.Pool.Borrow())
                 using (var cmd = handle.Connection.CreateCommand())
@@ -97,10 +110,10 @@ namespace DuckDbServer
                         var values = new object[colCount];
                         int rowsInBatch = 0;
                         bool firstBatch = true;
+                        var cachedResponses = new System.Collections.Generic.List<QueryResponse>();
 
                         while (reader.Read())
                         {
-                            // Check client cancellation to avoid wasted work
                             if (context.CancellationToken.IsCancellationRequested)
                                 return;
 
@@ -113,8 +126,10 @@ namespace DuckDbServer
 
                             if (rowsInBatch >= batchSize)
                             {
-                                await SendBatch(responseStream, builders, colCount, rowsInBatch,
-                                    firstBatch ? meta : null).ConfigureAwait(false);
+                                var resp = BuildBatch(builders, colCount, rowsInBatch,
+                                    firstBatch ? meta : null);
+                                await responseStream.WriteAsync(resp).ConfigureAwait(false);
+                                cachedResponses.Add(resp);
                                 firstBatch = false;
                                 rowsInBatch = 0;
                                 for (int c = 0; c < colCount; c++)
@@ -124,9 +139,14 @@ namespace DuckDbServer
 
                         if (rowsInBatch > 0 || firstBatch)
                         {
-                            await SendBatch(responseStream, builders, colCount, rowsInBatch,
-                                firstBatch ? meta : null).ConfigureAwait(false);
+                            var resp = BuildBatch(builders, colCount, rowsInBatch,
+                                firstBatch ? meta : null);
+                            await responseStream.WriteAsync(resp).ConfigureAwait(false);
+                            cachedResponses.Add(resp);
                         }
+
+                        // Cache the result for future hits
+                        queryCache.Put(sql, cachedResponses);
                     }
                 }
 
@@ -140,8 +160,7 @@ namespace DuckDbServer
             }
         }
 
-        private static async Task SendBatch(
-            IServerStreamWriter<QueryResponse> stream,
+        private static QueryResponse BuildBatch(
             ColumnBuilder[] builders, int colCount, int rowCount,
             List<ColumnMeta> meta)
         {
@@ -153,7 +172,7 @@ namespace DuckDbServer
             for (int c = 0; c < colCount; c++)
                 response.Data.Add(builders[c].Build());
 
-            await stream.WriteAsync(response).ConfigureAwait(false);
+            return response;
         }
 
         // ── Column builder: accumulates values into packed arrays ─────────────
@@ -337,6 +356,8 @@ namespace DuckDbServer
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = result.Error });
             }
+            // Invalidate cache after successful write
+            queryCache.Invalidate();
             Interlocked.Increment(ref queriesWrite);
             return Task.FromResult(new ExecuteResponse { Success = true });
         }
@@ -452,6 +473,7 @@ namespace DuckDbServer
                     });
                 }
 
+                queryCache.Invalidate();
                 Interlocked.Increment(ref queriesWrite);
                 return Task.FromResult(new BulkInsertResponse
                 {
