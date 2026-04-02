@@ -62,21 +62,114 @@ namespace DuckDbServer
         }
 
         /// <summary>
-        /// Get the next shard (round-robin).
-        /// Uses atomic increment for lock-free dispatch.
+        /// Get the shard for a SQL statement using hash-based routing.
+        ///
+        /// Extracts the table name from the SQL and hashes it to a shard index.
+        /// This ensures all operations on the same table go to the same shard:
+        ///   CREATE TABLE foo → shard 2
+        ///   INSERT INTO foo  → shard 2
+        ///   SELECT FROM foo  → shard 2
+        ///
+        /// For queries without a clear table (e.g. SELECT 1+1), falls back
+        /// to hashing the full SQL string.
         /// </summary>
-        public Shard Next()
+        public Shard ForSql(string sql)
         {
-            long idx = Interlocked.Increment(ref nextShard);
-            return shards[(int)(idx % shards.Length)];
+            string key = ExtractTableName(sql) ?? sql;
+            int hash = GetStableHash(key);
+            return shards[Math.Abs(hash) % shards.Length];
         }
 
         /// <summary>
-        /// Get a specific shard by index (for targeted operations).
+        /// Get a specific shard by index.
         /// </summary>
         public Shard GetShard(int index)
         {
             return shards[index % shards.Length];
+        }
+
+        /// <summary>
+        /// Extract the primary table name from a SQL statement.
+        /// Handles: SELECT ... FROM table, INSERT INTO table, CREATE TABLE table,
+        /// DROP TABLE table, UPDATE table, DELETE FROM table
+        /// Returns null if no table name found.
+        /// </summary>
+        private static string ExtractTableName(string sql)
+        {
+            if (string.IsNullOrEmpty(sql)) return null;
+
+            // Normalize: trim, collapse whitespace, uppercase for matching
+            string upper = sql.TrimStart().ToUpperInvariant();
+
+            // Try common patterns
+            string[] afterKeywords = {
+                "FROM ", "INTO ", "TABLE ", "UPDATE ", "JOIN "
+            };
+
+            foreach (var kw in afterKeywords)
+            {
+                int idx = upper.IndexOf(kw, StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    int start = idx + kw.Length;
+                    // Skip whitespace after keyword
+                    while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
+                    // Skip optional "IF NOT EXISTS" / "IF EXISTS"
+                    if (upper.Substring(start).StartsWith("IF "))
+                    {
+                        int nextSpace = sql.IndexOf(' ', start + 3);
+                        if (nextSpace > 0)
+                        {
+                            start = nextSpace + 1;
+                            while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
+                            // Skip "EXISTS" or "NOT EXISTS"
+                            if (upper.Substring(start).StartsWith("EXISTS ") ||
+                                upper.Substring(start).StartsWith("NOT "))
+                            {
+                                nextSpace = sql.IndexOf(' ', start);
+                                if (nextSpace > 0)
+                                {
+                                    start = nextSpace + 1;
+                                    while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
+                                    // If "NOT EXISTS", skip "EXISTS" too
+                                    if (upper.Substring(start).StartsWith("EXISTS "))
+                                    {
+                                        nextSpace = sql.IndexOf(' ', start);
+                                        if (nextSpace > 0) start = nextSpace + 1;
+                                        while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Read table name (stops at whitespace, (, ;, or end)
+                    int end = start;
+                    while (end < sql.Length && !char.IsWhiteSpace(sql[end])
+                           && sql[end] != '(' && sql[end] != ';')
+                        end++;
+
+                    if (end > start)
+                        return sql.Substring(start, end - start).ToLowerInvariant();
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Stable hash that doesn't change across .NET versions.
+        /// (String.GetHashCode is not guaranteed stable across runtimes.)
+        /// </summary>
+        private static int GetStableHash(string s)
+        {
+            unchecked
+            {
+                int hash = 5381;
+                foreach (char c in s)
+                    hash = ((hash << 5) + hash) + c;
+                return hash;
+            }
         }
 
         public void Dispose()
