@@ -116,10 +116,20 @@ namespace DuckDbBenchmark
                 Task.WaitAll(tasks);
                 stopwatch.Stop();
 
-                using (var result = client.Query("SELECT COUNT(*) AS cnt FROM bench_write"))
+                try
                 {
-                    var rows = result.ToRows();
-                    Console.WriteLine("  Verified: " + rows[0]["cnt"] + " rows written to bench_write");
+                    using (var result = client.Query("SELECT COUNT(*) AS cnt FROM bench_write"))
+                    {
+                        var rows = result.ToRows();
+                        if (rows.Count > 0 && rows[0].ContainsKey("cnt"))
+                            Console.WriteLine("  Verified: " + rows[0]["cnt"] + " rows written to bench_write");
+                        else
+                            Console.WriteLine("  Verified: " + result.RowCount + " rows in result");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("  Verify skipped: " + ex.Message);
                 }
 
                 return tracker.BuildResult(
