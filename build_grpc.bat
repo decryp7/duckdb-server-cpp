@@ -24,7 +24,7 @@ REM
 REM  Takes ~15-30 minutes depending on machine speed.
 REM ============================================================================
 
-set GRPC_VERSION=v1.49.0
+set GRPC_VERSION=v1.35.0
 set GRPC_SRC=C:\grpc-src
 set GRPC_INSTALL=C:\grpc-install
 set GRPC_BUILD=%GRPC_SRC%\build
@@ -68,8 +68,7 @@ cmake -B "%GRPC_BUILD%" -S "%GRPC_SRC%" ^
     -DgRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN=OFF ^
     -DgRPC_BUILD_GRPC_PHP_PLUGIN=OFF ^
     -DgRPC_BUILD_GRPC_PYTHON_PLUGIN=OFF ^
-    -DgRPC_BUILD_GRPC_RUBY_PLUGIN=OFF ^
-    -DABSL_PROPAGATE_CXX_STD=ON
+    -DgRPC_BUILD_GRPC_RUBY_PLUGIN=OFF
 
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: CMake configure failed
