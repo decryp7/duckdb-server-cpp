@@ -1,7 +1,8 @@
 # DuckDB gRPC Server  v5.0
 
-A DuckDB database server over **gRPC** with a **.NET 4.6.2** client library.
-Built for Visual Studio 2017. No Apache Arrow dependency.
+A DuckDB database server over **gRPC** with three server implementations
+(C#, C++, Rust) and a .NET 4.6.2 client library.
+All servers use the same `proto/duckdb_service.proto` — fully interoperable.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -256,6 +257,7 @@ using (var client = new DuckDbClient("server", 17777))
 | C# server | Grpc.Core 2.46.6, Google.Protobuf 3.24.4, DuckDB.NET.Data.Full 1.1.1 |
 | C# client | Grpc.Core 2.46.6, Google.Protobuf 3.24.4 |
 | C++ server | gRPC 1.35.0 (built from source via `build_grpc.bat`), DuckDB (third_party/) |
+| **Rust server** | **tonic 0.12, prost 0.13, duckdb 1.1 (bundled), tokio** |
 
 All versions communicate via the same gRPC wire protocol (HTTP/2 + protobuf).
 Different gRPC versions are fully interoperable — only the `.proto` file must match.

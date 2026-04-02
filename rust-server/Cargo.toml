@@ -1,0 +1,27 @@
+[package]
+name = "duckdb-grpc-server"
+version = "5.0.0"
+edition = "2021"
+description = "High-performance DuckDB gRPC server (Rust edition)"
+
+[[bin]]
+name = "duckdb-grpc-server"
+path = "src/main.rs"
+
+[dependencies]
+# gRPC server
+tonic = "0.12"
+prost = "0.13"
+tokio = { version = "1", features = ["full"] }
+
+# DuckDB
+duckdb = { version = "1.1", features = ["bundled"] }
+
+# Utilities
+clap = { version = "4", features = ["derive"] }
+crossbeam = "0.8"
+num_cpus = "1"
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-build = "0.12"
