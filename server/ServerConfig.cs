@@ -39,8 +39,16 @@ namespace DuckDbServer
         /// <summary>DuckDB memory limit (e.g. "4GB", "512MB"). Empty = DuckDB default (80% of RAM).</summary>
         public string MemoryLimit { get; set; } = "";
 
-        /// <summary>DuckDB thread count. 0 = DuckDB default (nCPU).</summary>
+        /// <summary>DuckDB thread count per shard. 0 = auto (1 for sharded, nCPU for single).</summary>
         public int DuckDbThreads { get; set; } = 0;
+
+        /// <summary>
+        /// Number of DuckDB shards (independent database instances).
+        /// Each shard has its own connection pool, writer, and thread pool.
+        /// Queries are distributed round-robin across shards.
+        /// Default (1) = single database. Set to nCPU/2 for maximum throughput.
+        /// </summary>
+        public int Shards { get; set; } = 1;
 
         /// <summary>Path to TLS certificate PEM file. Empty for plaintext.</summary>
         public string TlsCertPath { get; set; } = "";

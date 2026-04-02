@@ -17,8 +17,7 @@ namespace DuckDbServer
     public sealed class DuckDbServer : DuckDbService.DuckDbServiceBase, IDisposable
     {
         private readonly ServerConfig config;
-        private readonly IConnectionPool readPool;
-        private readonly IWriteSerializer writer;
+        private readonly ShardedDuckDb shardedDb;
 
         private long queriesRead;
         private long queriesWrite;
@@ -26,11 +25,13 @@ namespace DuckDbServer
 
         private readonly int batchSize;
 
-        public DuckDbServer(ServerConfig config, IConnectionPool readPool, IWriteSerializer writer)
+        /// <summary>
+        /// Create server with sharded DuckDB (round-robin across N independent instances).
+        /// </summary>
+        public DuckDbServer(ServerConfig config, ShardedDuckDb shardedDb)
         {
             this.config = config;
-            this.readPool = readPool;
-            this.writer = writer;
+            this.shardedDb = shardedDb;
             this.batchSize = config.BatchSize > 0 ? config.BatchSize : 8192;
         }
 
@@ -46,7 +47,7 @@ namespace DuckDbServer
                 QueriesRead = Interlocked.Read(ref queriesRead),
                 QueriesWrite = Interlocked.Read(ref queriesWrite),
                 Errors = Interlocked.Read(ref errors),
-                ReaderPoolSize = readPool.Size,
+                ReaderPoolSize = shardedDb.TotalPoolSize,
                 Port = config.Port
             };
         }
@@ -62,7 +63,9 @@ namespace DuckDbServer
 
             try
             {
-                using (var handle = readPool.Borrow())
+                // Round-robin shard selection
+                var shard = shardedDb.Next();
+                using (var handle = shard.Pool.Borrow())
                 using (var cmd = handle.Connection.CreateCommand())
                 {
                     cmd.CommandText = sql;
@@ -327,7 +330,8 @@ namespace DuckDbServer
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL required" });
             }
-            var result = writer.Submit(sql);
+            var shard = shardedDb.Next();
+            var result = shard.Writer.Submit(sql);
             if (!result.Ok)
             {
                 Interlocked.Increment(ref errors);
@@ -436,7 +440,8 @@ namespace DuckDbServer
                     sb.Append(")");
                 }
 
-                var result = writer.Submit(sb.ToString());
+                var shard = shardedDb.Next();
+                var result = shard.Writer.Submit(sb.ToString());
                 if (!result.Ok)
                 {
                     Interlocked.Increment(ref errors);
@@ -469,8 +474,7 @@ namespace DuckDbServer
         public void Dispose()
         {
             if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
-            writer.Dispose();
-            readPool.Dispose();
+            shardedDb.Dispose();
         }
     }
 }

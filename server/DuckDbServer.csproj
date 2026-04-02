@@ -78,6 +78,7 @@
     <Compile Include="InsertParser.cs" />
     <Compile Include="InsertBatcher.cs" />
     <Compile Include="ServerConfig.cs" />
+    <Compile Include="ShardedDuckDb.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

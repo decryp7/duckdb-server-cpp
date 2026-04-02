@@ -52,6 +52,7 @@ echo.
 server\bin\Release\DuckDbServer.exe ^
     --db data.duckdb ^
     --port 17777 ^
+    --shards 4 ^
     --readers 128 ^
     --batch-ms 1 ^
     --batch-max 64 ^

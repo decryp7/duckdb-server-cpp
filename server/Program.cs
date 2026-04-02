@@ -52,16 +52,13 @@ namespace DuckDbServer
         {
             // Create the database manager first. All connections share this DB.
             // Without this, each DuckDBConnection(":memory:") creates a separate DB.
-            DatabaseManager dbManager = null;
             DuckDbServer duckDbServer = null;
 
+            ShardedDuckDb shardedDb = null;
             try
             {
-                dbManager = new DatabaseManager(config.DbPath, config);
-
-                var readPool = new ConnectionPool(dbManager, config.ReaderPoolSize);
-                var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
-                duckDbServer = new DuckDbServer(config, readPool, writer);
+                shardedDb = new ShardedDuckDb(config);
+                duckDbServer = new DuckDbServer(config, shardedDb);
 
                 var credentials = BuildCredentials(config);
 
@@ -95,7 +92,7 @@ namespace DuckDbServer
             {
                 // Dispose in reverse order. Handles partial construction.
                 duckDbServer?.Dispose();
-                dbManager?.Dispose();
+                shardedDb?.Dispose();
             }
 
             return 0;
@@ -200,6 +197,7 @@ namespace DuckDbServer
                     case "--readers":   config.ReaderPoolSize = ParsePositive(value, "--readers"); break;
                     case "--batch-ms":  config.WriteBatchMs = ParseInt(value, "--batch-ms"); break;
                     case "--batch-max":    config.WriteBatchMax = ParsePositive(value, "--batch-max"); break;
+                    case "--shards":       config.Shards = ParsePositive(value, "--shards"); break;
                     case "--batch-size":   config.BatchSize = ParsePositive(value, "--batch-size"); break;
                     case "--memory-limit": config.MemoryLimit = value; break;
                     case "--threads":      config.DuckDbThreads = ParsePositive(value, "--threads"); break;
