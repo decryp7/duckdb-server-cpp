@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  <!-- Grpc.Tools props (defines Protobuf item type) -->
-  <Import Project="..\packages\Grpc.Tools.2.46.6\build\Grpc.Tools.props" Condition="Exists('..\packages\Grpc.Tools.2.46.6\build\Grpc.Tools.props')" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -53,15 +51,15 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <!-- Proto file: auto-generates C# protobuf messages + gRPC service stubs -->
-    <Protobuf Include="..\proto\duckdb_service.proto" GrpcServices="Both" />
+    <!-- Pre-generated from proto/duckdb_service.proto.
+         Regenerate with: generate_proto.bat -->
+    <Compile Include="Generated\DuckdbService.cs" />
+    <Compile Include="Generated\DuckdbServiceGrpc.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
-    <!-- Include the .proto file in the solution for visibility -->
+    <!-- Include the proto file for reference -->
     <None Include="..\proto\duckdb_service.proto" Link="duckdb_service.proto" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <!-- Grpc.Tools targets (runs protoc during build) -->
-  <Import Project="..\packages\Grpc.Tools.2.46.6\build\Grpc.Tools.targets" Condition="Exists('..\packages\Grpc.Tools.2.46.6\build\Grpc.Tools.targets')" />
 </Project>

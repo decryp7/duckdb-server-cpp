@@ -76,6 +76,7 @@ namespace DuckArrowServer
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
                         // Write each batch as a complete Arrow IPC stream chunk.
+                        bool batchSent = false;
                         RecordBatch batch;
                         while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
                         {
@@ -93,10 +94,12 @@ namespace DuckArrowServer
                             {
                                 IpcData = Google.Protobuf.ByteString.CopyFrom(chunk)
                             }).ConfigureAwait(false);
+                            batchSent = true;
                         }
 
-                        // If no batches were sent, send schema-only chunk so client gets the schema.
-                        if (Interlocked.Read(ref queriesRead) >= 0) // always true, just to avoid "unreachable" warning
+                        // If no batches were sent (empty result), send schema-only chunk
+                        // so the client still receives the column schema.
+                        if (!batchSent)
                         {
                             byte[] schemaChunk = SerializeSchemaOnlyIpc(schema);
                             await responseStream.WriteAsync(new QueryResponse
