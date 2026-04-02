@@ -92,6 +92,7 @@ private:
                     throw std::runtime_error(
                         "ConnectionPool: failed to create connection "
                         + std::to_string(i + 1) + "/" + std::to_string(pool_size_));
+                apply_connection_pragmas(conn);
                 idle_.push(conn);
             }
         } catch (...) {
@@ -102,6 +103,17 @@ private:
             pool_size_ = 0;
             throw;
         }
+    }
+
+    /// Apply per-connection performance settings.
+    /// threads=1 eliminates internal thread contention (pool provides parallelism).
+    /// preserve_insertion_order=false speeds up scans without ORDER BY.
+    /// enable_object_cache caches metadata for faster lookups.
+    static void apply_connection_pragmas(duckdb_connection conn) {
+        duckdb_query(conn, "SET threads=1", nullptr);
+        duckdb_query(conn, "SET preserve_insertion_order=false", nullptr);
+        duckdb_query(conn, "PRAGMA enable_object_cache", nullptr);
+        duckdb_query(conn, "SET checkpoint_threshold='256MB'", nullptr);
     }
 
     void release(duckdb_connection conn) {

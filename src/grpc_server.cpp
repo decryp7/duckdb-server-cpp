@@ -523,92 +523,73 @@ grpc::Status DuckGrpcServer::BulkInsert(
     }
 
     try {
-        // Fan-out: append to ALL shards (consistent with write-all strategy)
-        for (auto& shard_ptr : shards_) {
-            auto& shard = *shard_ptr;
+        // Build multi-row INSERT SQL from columnar protobuf data.
+        // Uses write_to_all() to route through each shard's WriteSerializer,
+        // avoiding thread-safety issues with direct writer_conn access.
+        std::string sql;
+        sql.reserve(row_count * col_count * 10);
 
-            duckdb_appender appender = nullptr;
-            if (duckdb_appender_create(shard.writer_conn, nullptr, table.c_str(), &appender) == DuckDBError) {
-                std::string err = "Appender creation failed for table: " + table;
-                const char* appender_err = duckdb_appender_error(appender);
-                if (appender_err) err = appender_err;
-                duckdb_appender_destroy(&appender);
-                response->set_success(false);
-                response->set_error(err);
-                stat_errors_.fetch_add(1);
-                return grpc::Status::OK;
-            }
+        for (int r = 0; r < row_count; ++r) {
+            if (r == 0) { sql += "INSERT INTO "; sql += table; sql += " VALUES ("; }
+            else { sql += ", ("; }
 
-            for (int r = 0; r < row_count; ++r) {
-                for (int c = 0; c < col_count; ++c) {
-                    const auto& cd = request->data(c);
+            for (int c = 0; c < col_count; ++c) {
+                if (c > 0) sql += ", ";
+                const auto& cd = request->data(c);
 
-                    bool is_null = false;
-                    for (int n = 0; n < cd.null_indices_size(); ++n) {
-                        if (cd.null_indices(n) == r) { is_null = true; break; }
-                    }
-
-                    if (is_null) {
-                        duckdb_append_null(appender);
-                        continue;
-                    }
-
-                    switch (request->columns(c).type()) {
-                        case duckdb::v1::TYPE_BOOLEAN:
-                            duckdb_append_bool(appender, r < cd.bool_values_size() ? cd.bool_values(r) : false);
-                            break;
-                        case duckdb::v1::TYPE_INT8:
-                        case duckdb::v1::TYPE_INT16:
-                        case duckdb::v1::TYPE_INT32:
-                        case duckdb::v1::TYPE_UINT8:
-                        case duckdb::v1::TYPE_UINT16:
-                            duckdb_append_int32(appender, r < cd.int32_values_size() ? cd.int32_values(r) : 0);
-                            break;
-                        case duckdb::v1::TYPE_INT64:
-                        case duckdb::v1::TYPE_UINT32:
-                        case duckdb::v1::TYPE_UINT64:
-                            duckdb_append_int64(appender, r < cd.int64_values_size() ? cd.int64_values(r) : 0);
-                            break;
-                        case duckdb::v1::TYPE_FLOAT:
-                            duckdb_append_float(appender, r < cd.float_values_size() ? cd.float_values(r) : 0.0f);
-                            break;
-                        case duckdb::v1::TYPE_DOUBLE:
-                        case duckdb::v1::TYPE_DECIMAL:
-                            duckdb_append_double(appender, r < cd.double_values_size() ? cd.double_values(r) : 0.0);
-                            break;
-                        default:
-                            if (r < cd.string_values_size())
-                                duckdb_append_varchar(appender, cd.string_values(r).c_str());
-                            else
-                                duckdb_append_varchar(appender, "");
-                            break;
-                    }
+                bool is_null = false;
+                for (int n = 0; n < cd.null_indices_size(); ++n) {
+                    if (cd.null_indices(n) == r) { is_null = true; break; }
                 }
 
-                if (duckdb_appender_end_row(appender) == DuckDBError) {
-                    std::string err = "Appender row error";
-                    const char* appender_err = duckdb_appender_error(appender);
-                    if (appender_err) err = appender_err;
-                    duckdb_appender_destroy(&appender);
-                    response->set_success(false);
-                    response->set_error(err);
-                    stat_errors_.fetch_add(1);
-                    return grpc::Status::OK;
+                if (is_null) { sql += "NULL"; continue; }
+
+                switch (request->columns(c).type()) {
+                    case duckdb::v1::TYPE_BOOLEAN:
+                        sql += (r < cd.bool_values_size() && cd.bool_values(r)) ? "true" : "false";
+                        break;
+                    case duckdb::v1::TYPE_INT8:
+                    case duckdb::v1::TYPE_INT16:
+                    case duckdb::v1::TYPE_INT32:
+                    case duckdb::v1::TYPE_UINT8:
+                    case duckdb::v1::TYPE_UINT16:
+                        sql += std::to_string(r < cd.int32_values_size() ? cd.int32_values(r) : 0);
+                        break;
+                    case duckdb::v1::TYPE_INT64:
+                    case duckdb::v1::TYPE_UINT32:
+                    case duckdb::v1::TYPE_UINT64:
+                        sql += std::to_string(r < cd.int64_values_size() ? cd.int64_values(r) : 0);
+                        break;
+                    case duckdb::v1::TYPE_FLOAT:
+                        sql += std::to_string(r < cd.float_values_size() ? cd.float_values(r) : 0.0f);
+                        break;
+                    case duckdb::v1::TYPE_DOUBLE:
+                    case duckdb::v1::TYPE_DECIMAL:
+                        sql += std::to_string(r < cd.double_values_size() ? cd.double_values(r) : 0.0);
+                        break;
+                    default: {
+                        sql += "'";
+                        if (r < cd.string_values_size()) {
+                            const std::string& sv = cd.string_values(r);
+                            for (size_t i = 0; i < sv.size(); ++i) {
+                                if (sv[i] == '\'') sql += "''";
+                                else sql += sv[i];
+                            }
+                        }
+                        sql += "'";
+                        break;
+                    }
                 }
             }
+            sql += ")";
+        }
 
-            if (duckdb_appender_flush(appender) == DuckDBError) {
-                std::string err = "Appender flush failed";
-                const char* appender_err = duckdb_appender_error(appender);
-                if (appender_err) err = appender_err;
-                duckdb_appender_destroy(&appender);
-                response->set_success(false);
-                response->set_error(err);
-                stat_errors_.fetch_add(1);
-                return grpc::Status::OK;
-            }
-
-            duckdb_appender_destroy(&appender);
+        const WriteResult wr = write_to_all(sql);
+        if (!wr.ok) {
+            stat_errors_.fetch_add(1);
+            response->set_success(false);
+            response->set_error(wr.error);
+            return grpc::Status::OK;
         }
 
         cache_.invalidate();
