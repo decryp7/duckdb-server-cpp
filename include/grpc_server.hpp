@@ -67,6 +67,11 @@ public:
         const duckdb::v1::StatsRequest* request,
         duckdb::v1::StatsResponse* response) override;
 
+    grpc::Status BulkInsert(
+        grpc::ServerContext* context,
+        const duckdb::v1::BulkInsertRequest* request,
+        duckdb::v1::BulkInsertResponse* response) override;
+
     ServerStats stats() const;
 
 private:

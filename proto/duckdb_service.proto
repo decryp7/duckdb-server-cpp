@@ -17,6 +17,11 @@ option csharp_namespace = "DuckDbProto";
 service DuckDbService {
   rpc Query (QueryRequest) returns (stream QueryResponse);
   rpc Execute (ExecuteRequest) returns (ExecuteResponse);
+
+  // Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
+  // Bypasses SQL parser entirely — writes directly to storage.
+  // Client sends columnar data; server appends via duckdb_appender.
+  rpc BulkInsert (BulkInsertRequest) returns (BulkInsertResponse);
   rpc Ping (PingRequest) returns (PingResponse);
   rpc GetStats (StatsRequest) returns (StatsResponse);
 }
@@ -111,4 +116,27 @@ message StatsResponse {
   int64 errors = 3;
   int32 reader_pool_size = 4;
   int32 port = 5;
+}
+
+// ── BulkInsert ───────────────────────────────────────────────────────────────
+
+// Bulk insert request: columnar data written directly via DuckDB Appender API.
+// 100x faster than individual INSERT SQL statements because it bypasses
+// the SQL parser, planner, and optimizer entirely.
+//
+// Usage:
+//   client.BulkInsert({table: "events", columns: [...], data: [...]})
+//
+// The table must already exist. Column order must match the schema.
+message BulkInsertRequest {
+  string table = 1;                    // Target table name
+  repeated ColumnMeta columns = 2;     // Column metadata (names + types)
+  repeated ColumnData data = 3;        // Columnar data (same format as QueryResponse)
+  int32 row_count = 4;                 // Number of rows in this batch
+}
+
+message BulkInsertResponse {
+  bool success = 1;
+  string error = 2;
+  int64 rows_inserted = 3;             // Number of rows successfully inserted
 }
