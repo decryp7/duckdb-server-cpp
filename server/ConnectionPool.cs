@@ -1,36 +1,29 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading;
 using DuckDB.NET.Data;
 
 namespace DuckArrowServer
 {
     /// <summary>
-    /// Thread-safe fixed-size pool of DuckDB connections for read queries.
+    /// High-performance thread-safe connection pool for DuckDB read queries.
     ///
-    /// How it works:
-    ///   1. On creation, opens N connections and puts them in a queue.
-    ///   2. When a caller needs a connection, it calls Borrow().
-    ///   3. Borrow() waits until a connection is free, then gives it out.
-    ///   4. The caller gets a Handle. When the Handle is disposed, the
-    ///      connection goes back into the queue for the next caller.
-    ///   5. Dispose() waits for all borrowed connections to be returned
-    ///      before destroying them (prevents use-after-dispose).
+    /// Uses ConcurrentBag + SemaphoreSlim instead of Queue + Monitor
+    /// for lower lock contention under high concurrency (100+ threads).
+    ///
+    /// ConcurrentBag is lock-free for same-thread take/add (thread-local lists).
+    /// SemaphoreSlim is lighter than Monitor for signalling.
     /// </summary>
     public sealed class ConnectionPool : IConnectionPool
     {
-        private readonly Queue<DuckDBConnection> idle;
-        private readonly object lockObj = new object();
+        private readonly ConcurrentBag<DuckDBConnection> idle;
+        private readonly SemaphoreSlim semaphore;
         private readonly int borrowTimeoutMs;
         private readonly int poolSize;
-        private bool disposed;
+        private int disposed; // 0=alive, 1=disposed
 
-        /// <summary>Total number of connections (idle + borrowed).</summary>
         public int Size { get { return poolSize; } }
 
-        /// <summary>
-        /// Create a pool of DuckDB read connections.
-        /// </summary>
         public ConnectionPool(DatabaseManager dbManager, int poolSize, int borrowTimeoutMs = 10000)
         {
             if (poolSize < 1)
@@ -38,86 +31,77 @@ namespace DuckArrowServer
 
             this.borrowTimeoutMs = borrowTimeoutMs;
             this.poolSize = poolSize;
-            idle = new Queue<DuckDBConnection>(poolSize);
+            idle = new ConcurrentBag<DuckDBConnection>();
+            semaphore = new SemaphoreSlim(poolSize, poolSize);
 
             CreateConnections(dbManager, poolSize);
         }
 
         /// <summary>
-        /// Borrow an idle connection. Blocks until one is available.
+        /// Borrow a connection. Blocks up to borrowTimeoutMs if all are busy.
+        /// Uses SemaphoreSlim.Wait instead of Monitor.Wait for less contention.
         /// </summary>
         public IConnectionHandle Borrow()
         {
-            var deadline = DateTime.UtcNow.AddMilliseconds(borrowTimeoutMs);
+            if (Thread.VolatileRead(ref disposed) != 0)
+                throw new ObjectDisposedException(nameof(ConnectionPool));
 
-            lock (lockObj)
+            if (!semaphore.Wait(borrowTimeoutMs))
+                throw new TimeoutException(
+                    "ConnectionPool: timed out waiting for a connection. " +
+                    "Pool size is " + poolSize + ". Consider increasing --readers.");
+
+            // Semaphore acquired — a connection must be available in the bag.
+            DuckDBConnection conn;
+            if (!idle.TryTake(out conn))
             {
-                while (idle.Count == 0)
-                {
-                    if (disposed)
-                        throw new ObjectDisposedException(nameof(ConnectionPool));
-
-                    int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
-                    if (remaining <= 0)
-                        throw new TimeoutException(
-                            "ConnectionPool: timed out waiting for a connection. " +
-                            "Pool size is " + poolSize + ". Consider increasing --readers.");
-
-                    Monitor.Wait(lockObj, remaining);
-                }
-
-                var conn = idle.Dequeue();
-                return new Handle(this, conn);
+                semaphore.Release();
+                throw new InvalidOperationException("ConnectionPool: internal inconsistency.");
             }
+
+            return new Handle(this, conn);
         }
 
-        /// <summary>
-        /// Wait for all borrowed connections to be returned, then dispose them.
-        /// This prevents use-after-dispose when in-flight gRPC handlers still
-        /// hold borrowed connections.
-        /// </summary>
         public void Dispose()
         {
-            lock (lockObj)
+            if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
+
+            // Wait up to 30 seconds for all borrowed connections to return.
+            int returned = 0;
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (returned < poolSize)
             {
-                if (disposed) return;
-                disposed = true;
-
-                // Wake any threads waiting in Borrow() so they see disposed=true.
-                Monitor.PulseAll(lockObj);
-
-                // Wait up to 30 seconds total for all borrowed connections to return.
-                // If a Handle is leaked (caller bug), we give up and dispose what we have.
-                var deadline = DateTime.UtcNow.AddSeconds(30);
-                while (idle.Count < poolSize)
+                DuckDBConnection conn;
+                if (idle.TryTake(out conn))
                 {
-                    int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
-                    if (remaining <= 0) break; // give up waiting for leaked handles
-                    Monitor.Wait(lockObj, remaining);
+                    SafeDispose(conn);
+                    returned++;
                 }
-
-                // Dispose all connections we have (idle + any that were returned).
-                while (idle.Count > 0)
-                    SafeDispose(idle.Dequeue());
+                else if (DateTime.UtcNow > deadline)
+                {
+                    break; // give up waiting for leaked handles
+                }
+                else
+                {
+                    Thread.Sleep(50); // brief wait for handles to be returned
+                }
             }
-        }
 
-        // ── Private helpers ──────────────────────────────────────────────────
+            semaphore.Dispose();
+        }
 
         private void CreateConnections(DatabaseManager dbManager, int count)
         {
             try
             {
                 for (int i = 0; i < count; i++)
-                {
-                    var conn = dbManager.CreateConnection();
-                    idle.Enqueue(conn);
-                }
+                    idle.Add(dbManager.CreateConnection());
             }
             catch
             {
-                while (idle.Count > 0)
-                    SafeDispose(idle.Dequeue());
+                DuckDBConnection conn;
+                while (idle.TryTake(out conn))
+                    SafeDispose(conn);
                 throw;
             }
         }
@@ -126,32 +110,22 @@ namespace DuckArrowServer
         {
             if (conn == null) return;
 
-            lock (lockObj)
+            if (Thread.VolatileRead(ref disposed) != 0)
             {
-                if (disposed)
-                {
-                    // Pool is shutting down. Put back so Dispose() can count and clean up.
-                    idle.Enqueue(conn);
-                    Monitor.PulseAll(lockObj); // Wake Dispose() waiting for all connections.
-                    return;
-                }
-                idle.Enqueue(conn);
-                Monitor.Pulse(lockObj);
+                SafeDispose(conn);
+                return;
             }
+
+            idle.Add(conn);
+            semaphore.Release();
         }
 
         private static void SafeDispose(IDisposable obj)
         {
             try { obj?.Dispose(); }
-            catch { /* best-effort cleanup */ }
+            catch { /* best-effort */ }
         }
 
-        // ── Handle (RAII wrapper) ────────────────────────────────────────────
-
-        /// <summary>
-        /// Holds a borrowed connection. When you dispose the handle,
-        /// the connection goes back to the pool automatically.
-        /// </summary>
         private sealed class Handle : IConnectionHandle
         {
             private readonly ConnectionPool pool;

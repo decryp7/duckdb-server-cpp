@@ -64,9 +64,11 @@ namespace DuckArrowServer
                     cmd.CommandText = sql;
                     using (var reader = cmd.ExecuteReader())
                     {
+                        int colCount = reader.FieldCount;
+
                         // First response: column schema
                         var schemaResponse = new QueryResponse();
-                        for (int c = 0; c < reader.FieldCount; c++)
+                        for (int c = 0; c < colCount; c++)
                         {
                             schemaResponse.Columns.Add(new ColumnInfo
                             {
@@ -76,28 +78,35 @@ namespace DuckArrowServer
                         }
                         await responseStream.WriteAsync(schemaResponse).ConfigureAwait(false);
 
-                        // Subsequent responses: batched rows
+                        // Shared null value — avoid allocating one per null cell.
+                        var nullValue = new Value { IsNull = true };
+
+                        // Stream rows in batches
                         var batch = new QueryResponse();
                         int rowsInBatch = 0;
 
+                        // Pre-allocate object array for GetValues (avoids per-cell GetValue boxing)
+                        var values = new object[colCount];
+
                         while (reader.Read())
                         {
+                            reader.GetValues(values); // bulk read — one call instead of N
+
                             var row = new Row();
-                            for (int c = 0; c < reader.FieldCount; c++)
+                            for (int c = 0; c < colCount; c++)
                             {
-                                if (reader.IsDBNull(c))
+                                if (values[c] == null || values[c] is DBNull)
                                 {
-                                    row.Values.Add(new Value { IsNull = true });
+                                    row.Values.Add(nullValue);
                                 }
                                 else
                                 {
-                                    row.Values.Add(new Value { Text = reader.GetValue(c).ToString() });
+                                    row.Values.Add(new Value { Text = values[c].ToString() });
                                 }
                             }
                             batch.Rows.Add(row);
                             rowsInBatch++;
 
-                            // Flush batch when it reaches batchSize
                             if (rowsInBatch >= batchSize)
                             {
                                 await responseStream.WriteAsync(batch).ConfigureAwait(false);
@@ -106,7 +115,6 @@ namespace DuckArrowServer
                             }
                         }
 
-                        // Flush remaining rows
                         if (rowsInBatch > 0)
                         {
                             await responseStream.WriteAsync(batch).ConfigureAwait(false);

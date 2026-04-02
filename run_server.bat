@@ -1,77 +1,60 @@
 @echo off
 REM ============================================================================
-REM  DuckDB gRPC Server — High Performance Launch Script
+REM  DuckDB gRPC Server — Low Latency / High Concurrency Launch Script
 REM
-REM  This script starts the C# DuckDB gRPC server with settings optimized
-REM  for maximum concurrent read and write throughput.
+REM  Optimized for sub-1000ms latency at 100+ concurrent readers/writers.
 REM
 REM  Configuration:
 REM    --db data.duckdb    File-based database for persistence.
-REM                        Data survives server restarts.
-REM                        Change to :memory: for fastest performance
-REM                        (no disk I/O, but data lost on restart).
 REM
-REM    --port 17777        Default gRPC listen port
+REM    --port 17777        gRPC listen port.
 REM
-REM    --readers 64        Connection pool size for concurrent SELECT queries.
-REM                        Each concurrent DoGet/Query uses one connection.
-REM                        Set higher if you have many parallel readers.
-REM                        Rule of thumb: 2x to 4x your CPU core count.
+REM    --readers 128       Connection pool sized for 100+ concurrent readers.
+REM                        Must be >= your peak concurrent reader count.
+REM                        If readers > pool size, requests queue and latency spikes.
 REM
-REM    --batch-ms 50       Write batching window in milliseconds.
-REM                        The server collects INSERT/UPDATE/DELETE statements
-REM                        over this window and executes them in one transaction.
-REM                        Higher = more writes per transaction = higher throughput
-REM                        but higher latency for individual writes.
-REM                        Default: 5ms. Set to 50ms for write-heavy workloads.
+REM    --batch-ms 1        Write batch window: 1ms for lowest write latency.
+REM                        Trades throughput for latency. Each write commits
+REM                        within ~1ms instead of waiting 50ms to batch more.
 REM
-REM    --batch-max 5000    Maximum statements per write transaction.
-REM                        Once this many writes accumulate, the batch flushes
-REM                        immediately regardless of the time window.
-REM                        Higher = better throughput during write spikes.
+REM    --batch-max 64      Small write batches commit faster.
+REM                        64 statements per transaction is enough for low-latency
+REM                        while still benefiting from INSERT merging.
 REM
-REM    --batch-size 16384  Rows per gRPC response message for SELECT queries.
-REM                        Larger batches = fewer gRPC round-trips = higher
-REM                        throughput for large result sets.
-REM                        Smaller batches = lower latency for first rows.
-REM                        16384 is a good balance for analytics workloads.
+REM    --batch-size 512    Rows per gRPC response message.
+REM                        Smaller = faster time-to-first-row for the client.
+REM                        512 rows per message keeps protobuf overhead low
+REM                        while delivering results quickly.
 REM
-REM    --memory-limit 8GB  DuckDB memory limit for query processing.
-REM                        Controls how much RAM DuckDB uses for sorts, joins,
-REM                        aggregations, and hash tables. Default is 80%% of RAM.
-REM                        Set explicitly to prevent DuckDB from using all memory.
+REM    --memory-limit 8GB  DuckDB memory for sorts, joins, aggregations.
 REM
-REM    --threads 0         DuckDB internal thread count (0 = auto = all CPUs).
-REM                        DuckDB parallelizes queries internally. Setting this
-REM                        to your CPU core count maximizes query throughput.
-REM                        0 means DuckDB auto-detects.
-REM
-REM  Performance features applied automatically by the server:
+REM  Performance features applied automatically:
 REM    - PRAGMA enable_object_cache     (faster metadata lookups)
 REM    - SET preserve_insertion_order=false (faster bulk inserts)
-REM    - Multi-row INSERT merging       (N individual INSERTs become 1)
-REM    - DDL auto-detection             (CREATE/DROP run outside transactions)
-REM    - Write serializer batching      (concurrent writes share transactions)
+REM    - Multi-row INSERT merging       (N INSERTs become 1 statement)
+REM    - Connection pool pre-warmed     (no cold-start penalty)
+REM    - StringBuilder for value serialization (fewer allocations)
 REM
 REM  Usage:
 REM    run_server.bat                         Launch with defaults below
-REM    run_server.bat --db C:\data\my.duckdb  Override database path
-REM    run_server.bat --port 9000             Override port
+REM    run_server.bat --db :memory:           In-memory mode (fastest, no persistence)
+REM    run_server.bat --readers 256           More concurrent readers
 REM
-REM  Stop: Press Ctrl+C in this window
+REM  Stop: Press Ctrl+C
 REM ============================================================================
 
 echo.
-echo  DuckDB gRPC Server — High Performance Mode
-echo  ============================================
+echo  DuckDB gRPC Server — Low Latency Mode
+echo  ========================================
+echo  Optimized for 100+ concurrent readers/writers
 echo.
 
 server\bin\Debug\DuckArrowServer.exe ^
     --db data.duckdb ^
     --port 17777 ^
-    --readers 64 ^
-    --batch-ms 50 ^
-    --batch-max 5000 ^
-    --batch-size 16384 ^
+    --readers 128 ^
+    --batch-ms 1 ^
+    --batch-max 64 ^
+    --batch-size 512 ^
     --memory-limit 8GB ^
     %*
