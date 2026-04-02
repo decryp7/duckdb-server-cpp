@@ -92,4 +92,13 @@
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- Auto-copy native DLLs to output directory after build -->
+  <Target Name="CopyNativeDlls" AfterTargets="Build">
+    <Copy SourceFiles="..\packages\Grpc.Core.2.46.6\runtimes\win-x64\native\grpc_csharp_ext.x64.dll"
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\DuckDB.NET.Bindings.Full.1.1.1\runtimes\win-x64\native\duckdb.dll"
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\DuckDB.NET.Bindings.Full.1.1.1\lib\netstandard2.0\DuckDB.NET.Bindings.dll"
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
