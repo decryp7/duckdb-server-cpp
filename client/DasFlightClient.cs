@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow;
 using DuckDbProto;
 using Grpc.Core;
 
@@ -13,19 +12,14 @@ namespace DuckArrowClient
     /// Thread-safe gRPC client for the DuckDB server.
     /// Implements <see cref="IDasFlightClient"/>.
     ///
-    /// Uses the auto-generated DuckDbService.DuckDbServiceClient from
-    /// proto/duckdb_service.proto (via Grpc.Tools codegen).
-    ///
-    /// Compatible with any server implementing the same proto (C# or C++).
-    /// One instance per application — HTTP/2 handles all concurrency.
+    /// Uses the custom DuckDbService protocol (proto/duckdb_service.proto).
+    /// No Arrow dependency — results are returned as protobuf rows.
     /// </summary>
     public sealed class DasFlightClient : IDasFlightClient
     {
         private readonly Channel channel;
         private readonly DuckDbService.DuckDbServiceClient grpcClient;
         private int disposed;
-
-        // ── Construction ─────────────────────────────────────────────────────
 
         public DasFlightClient(string host = "localhost", int port = 17777)
             : this(new Channel(host + ":" + port, ChannelCredentials.Insecure))
@@ -52,52 +46,33 @@ namespace DuckArrowClient
         {
             EnsureNotDisposed();
 
-            var batches = new List<RecordBatch>();
-            Schema schema = null;
-
             try
             {
                 var request = new QueryRequest { Sql = sql };
+                var columns = new List<ColumnInfo>();
+                var allRows = new List<Row>();
+
                 using (var call = grpcClient.Query(request, cancellationToken: ct))
                 {
                     while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
                     {
-                        var ipcData = call.ResponseStream.Current.IpcData;
-                        if (ipcData == null || ipcData.Length == 0) continue;
+                        var response = call.ResponseStream.Current;
 
-                        using (var ms = new MemoryStream(ipcData.ToByteArray()))
-                        using (var ipcReader = new Apache.Arrow.Ipc.ArrowStreamReader(ms))
-                        {
-                            RecordBatch batch;
-                            while ((batch = ipcReader.ReadNextRecordBatch()) != null)
-                            {
-                                if (schema == null)
-                                    schema = ipcReader.Schema;
-                                if (batch.Length > 0)
-                                    batches.Add(batch);
-                                else
-                                    batch.Dispose();
-                            }
-                            if (schema == null)
-                                schema = ipcReader.Schema;
-                        }
+                        // First response has column metadata
+                        if (response.Columns.Count > 0)
+                            columns.AddRange(response.Columns);
+
+                        // Subsequent responses have row data
+                        if (response.Rows.Count > 0)
+                            allRows.AddRange(response.Rows);
                     }
                 }
 
-                if (schema == null)
-                    schema = new Schema(new List<Field>(), null);
-
-                return new FlightQueryResult(schema, batches);
+                return new QueryResult(columns, allRows);
             }
             catch (RpcException ex)
             {
-                foreach (var b in batches) b?.Dispose();
                 throw new DasException("Query failed: " + ex.Status.Detail, ex);
-            }
-            catch (Exception)
-            {
-                foreach (var b in batches) b?.Dispose();
-                throw;
             }
         }
 
@@ -173,8 +148,6 @@ namespace DuckArrowClient
             }
         }
 
-        // ── Helpers ──────────────────────────────────────────────────────────
-
         private void EnsureNotDisposed()
         {
             if (Thread.VolatileRead(ref disposed) != 0)
@@ -187,5 +160,67 @@ namespace DuckArrowClient
             try { channel.ShutdownAsync().Wait(TimeSpan.FromSeconds(5)); }
             catch { /* best-effort */ }
         }
+    }
+
+    // ── Simple query result (replaces Arrow-based FlightQueryResult) ─────────
+
+    /// <summary>
+    /// Query result backed by protobuf rows. No Arrow dependency.
+    /// </summary>
+    public sealed class QueryResult : IFlightQueryResult
+    {
+        private readonly List<ColumnInfo> columns;
+        private readonly List<Row> rows;
+
+        public QueryResult(List<ColumnInfo> columns, List<Row> rows)
+        {
+            this.columns = columns;
+            this.rows = rows;
+        }
+
+        public int RowCount { get { return rows.Count; } }
+
+        public int ColumnCount { get { return columns.Count; } }
+
+        public string GetColumnName(int index) { return columns[index].Name; }
+
+        public string GetColumnType(int index) { return columns[index].Type; }
+
+        public List<Dictionary<string, object>> ToRows()
+        {
+            var result = new List<Dictionary<string, object>>(rows.Count);
+            foreach (var row in rows)
+            {
+                var dict = new Dictionary<string, object>(columns.Count);
+                for (int c = 0; c < columns.Count && c < row.Values.Count; c++)
+                {
+                    var val = row.Values[c];
+                    dict[columns[c].Name] = val.IsNull ? null : (object)val.Text;
+                }
+                result.Add(dict);
+            }
+            return result;
+        }
+
+        public DataTable ToDataTable(string tableName = "Result")
+        {
+            var dt = new DataTable(tableName);
+            foreach (var col in columns)
+                dt.Columns.Add(col.Name, typeof(string));
+
+            foreach (var row in rows)
+            {
+                var dr = dt.NewRow();
+                for (int c = 0; c < columns.Count && c < row.Values.Count; c++)
+                {
+                    var val = row.Values[c];
+                    dr[c] = val.IsNull ? (object)DBNull.Value : val.Text;
+                }
+                dt.Rows.Add(dr);
+            }
+            return dt;
+        }
+
+        public void Dispose() { /* nothing to dispose — plain data */ }
     }
 }

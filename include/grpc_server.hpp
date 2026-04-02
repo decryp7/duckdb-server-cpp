@@ -3,9 +3,8 @@
  * @file grpc_server.hpp
  * @brief gRPC server wrapping a DuckDB database.
  *
- * Uses the custom DuckDbService protocol defined in proto/duckdb_service.proto.
- * Replaces the Arrow Flight server for cross-language compatibility with
- * the C# client on .NET Framework 4.6.2.
+ * Uses the custom DuckDbService protocol (proto/duckdb_service.proto).
+ * No Arrow dependency — query results are serialized as protobuf rows.
  */
 
 #include "connection_pool.hpp"
@@ -14,22 +13,13 @@
 #include <grpcpp/grpcpp.h>
 #include "duckdb_service.grpc.pb.h"
 
-#include <arrow/api.h>
-#include <arrow/ipc/writer.h>
-#include <arrow/io/memory.h>
-#include <arrow/c/bridge.h>
-
+#include <duckdb.h>
 #include <atomic>
 #include <memory>
 #include <string>
 
 namespace das {
 
-// Forward declaration
-struct ServerConfig;
-struct ServerStats;
-
-// ─────────────────────────────────────────────────────────────────────────────
 struct ServerConfig {
     std::string db_path = ":memory:";
     std::string host = "0.0.0.0";
@@ -49,7 +39,6 @@ struct ServerStats {
     int       port;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
 class DuckGrpcServer final : public duckdb::v1::DuckDbService::Service {
 public:
     explicit DuckGrpcServer(const ServerConfig& cfg);
@@ -57,8 +46,6 @@ public:
 
     DuckGrpcServer(const DuckGrpcServer&) = delete;
     DuckGrpcServer& operator=(const DuckGrpcServer&) = delete;
-
-    // ── gRPC service methods (generated base class overrides) ────────────────
 
     grpc::Status Query(
         grpc::ServerContext* context,
@@ -80,7 +67,6 @@ public:
         const duckdb::v1::StatsRequest* request,
         duckdb::v1::StatsResponse* response) override;
 
-    // ── Metrics ──────────────────────────────────────────────────────────────
     ServerStats stats() const;
 
 private:

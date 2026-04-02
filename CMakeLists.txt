@@ -13,8 +13,7 @@ if(MSVC AND MSVC_VERSION LESS 1910)
   message(FATAL_ERROR "Visual Studio 2017 (MSVC 19.10+) or later is required.")
 endif()
 
-# ── Apache Arrow (for IPC serialization, no Flight needed) ────────────────────
-find_package(Arrow REQUIRED)
+# ── Apache Arrow is no longer needed — results are serialized as protobuf rows
 
 # ── gRPC + Protobuf ──────────────────────────────────────────────────────────
 find_package(Protobuf REQUIRED)
@@ -89,7 +88,6 @@ if(NOT DUCKDB_INCLUDE_DIR OR NOT DUCKDB_LIBRARY)
     "  Place duckdb.h + duckdb.lib under third_party/duckdb/{include,lib}")
 endif()
 
-message(STATUS "Arrow     : ${Arrow_VERSION}")
 message(STATUS "DuckDB    : ${DUCKDB_INCLUDE_DIR}")
 
 # ── Executable ────────────────────────────────────────────────────────────────
@@ -110,7 +108,6 @@ target_include_directories(duckdb_grpc_server PRIVATE
 # Link libraries
 if(gRPC_FOUND)
   target_link_libraries(duckdb_grpc_server PRIVATE
-    Arrow::arrow_shared
     gRPC::grpc++
     protobuf::libprotobuf
     ${DUCKDB_LIBRARY}
@@ -118,7 +115,6 @@ if(gRPC_FOUND)
 else()
   target_include_directories(duckdb_grpc_server PRIVATE ${GRPC_INCLUDE_DIR})
   target_link_libraries(duckdb_grpc_server PRIVATE
-    Arrow::arrow_shared
     ${GRPC_LIBRARY}
     ${GRPC_GRPC_LIBRARY}
     protobuf::libprotobuf

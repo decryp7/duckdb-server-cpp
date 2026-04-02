@@ -2,29 +2,15 @@
  * @file grpc_server.cpp
  * @brief Implementation of DuckGrpcServer.
  *
- * Uses the custom DuckDbService protocol (proto/duckdb_service.proto).
- * Query results are serialized as Arrow IPC streams inside QueryResponse.ipc_data.
+ * Uses DuckDB C API directly for queries. No Arrow dependency.
+ * Results are serialized as protobuf rows (ColumnInfo + Row + Value).
  */
 
 #include "grpc_server.hpp"
 #include <duckdb.h>
-#include <arrow/c/bridge.h>
-#include <arrow/ipc/writer.h>
-#include <arrow/io/memory.h>
 #include <iostream>
 #include <sstream>
 #include <thread>
-
-// DuckDB Arrow C API (declared here to keep headers clean)
-extern "C" {
-duckdb_state duckdb_query_arrow(duckdb_connection, const char*, duckdb_arrow*);
-duckdb_state duckdb_query_arrow_schema(duckdb_arrow, duckdb_arrow_schema*);
-duckdb_state duckdb_query_arrow_array(duckdb_arrow, duckdb_arrow_array*);
-const char*  duckdb_query_arrow_error(duckdb_arrow);
-void         duckdb_destroy_arrow(duckdb_arrow*);
-void         duckdb_destroy_arrow_schema(duckdb_arrow_schema*);
-void         duckdb_destroy_arrow_array(duckdb_arrow_array*);
-}
 
 namespace das {
 
@@ -97,82 +83,7 @@ ServerStats DuckGrpcServer::stats() const {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: serialize Arrow schema + batches from a DuckDB query into IPC bytes
-// ─────────────────────────────────────────────────────────────────────────────
-
-static std::string serialize_query_to_ipc(duckdb_connection conn, const std::string& sql) {
-    // Step 1: Execute the query
-    duckdb_arrow cursor = nullptr;
-    if (duckdb_query_arrow(conn, sql.c_str(), &cursor) == DuckDBError) {
-        std::string err = duckdb_query_arrow_error(cursor);
-        if (cursor) duckdb_destroy_arrow(&cursor);
-        throw std::runtime_error(err.empty() ? "DuckDB: unknown query error" : err);
-    }
-
-    // Step 2: Import schema
-    duckdb_arrow_schema raw_schema = nullptr;
-    if (duckdb_query_arrow_schema(cursor, &raw_schema) == DuckDBError) {
-        if (raw_schema) duckdb_destroy_arrow_schema(&raw_schema);
-        duckdb_destroy_arrow(&cursor);
-        throw std::runtime_error("DuckDB: failed to retrieve Arrow schema");
-    }
-
-    auto schema_result = arrow::ImportSchema(reinterpret_cast<ArrowSchema*>(raw_schema));
-    if (!schema_result.ok()) {
-        duckdb_destroy_arrow(&cursor);
-        throw std::runtime_error("ImportSchema: " + schema_result.status().ToString());
-    }
-    auto schema = schema_result.ValueOrDie();
-
-    // Step 3: Write IPC stream to buffer
-    auto buffer_stream = arrow::io::BufferOutputStream::Create(1024 * 1024).ValueOrDie();
-    auto ipc_writer_result = arrow::ipc::MakeStreamWriter(buffer_stream, schema);
-    if (!ipc_writer_result.ok()) {
-        duckdb_destroy_arrow(&cursor);
-        throw std::runtime_error("MakeStreamWriter: " + ipc_writer_result.status().ToString());
-    }
-    auto ipc_writer = ipc_writer_result.ValueOrDie();
-
-    // Step 4: Write batches
-    while (true) {
-        duckdb_arrow_array raw_array = nullptr;
-        if (duckdb_query_arrow_array(cursor, &raw_array) == DuckDBError) {
-            ipc_writer->Close();
-            duckdb_destroy_arrow(&cursor);
-            throw std::runtime_error("duckdb_query_arrow_array failed");
-        }
-
-        auto* arr = reinterpret_cast<ArrowArray*>(raw_array);
-        bool is_eos = (!arr || arr->length == 0);
-        if (is_eos) {
-            if (raw_array) duckdb_destroy_arrow_array(&raw_array);
-            break;
-        }
-
-        auto batch_result = arrow::ImportRecordBatch(arr, schema);
-        if (!batch_result.ok()) {
-            ipc_writer->Close();
-            duckdb_destroy_arrow(&cursor);
-            throw std::runtime_error("ImportRecordBatch: " + batch_result.status().ToString());
-        }
-
-        auto status = ipc_writer->WriteRecordBatch(*batch_result.ValueOrDie());
-        if (!status.ok()) {
-            ipc_writer->Close();
-            duckdb_destroy_arrow(&cursor);
-            throw std::runtime_error("WriteRecordBatch: " + status.ToString());
-        }
-    }
-
-    ipc_writer->Close();
-    duckdb_destroy_arrow(&cursor);
-
-    auto buffer = buffer_stream->Finish().ValueOrDie();
-    return buffer->ToString();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Query — stream Arrow IPC results
+// Query — stream protobuf rows
 // ─────────────────────────────────────────────────────────────────────────────
 
 grpc::Status DuckGrpcServer::Query(
@@ -185,14 +96,83 @@ grpc::Status DuckGrpcServer::Query(
     try {
         auto handle = read_pool_->borrow();
 
-        std::string ipc_data = serialize_query_to_ipc(handle.get(), sql);
+        // Execute query using DuckDB C API
+        duckdb_result result;
+        if (duckdb_query(handle.get(), sql.c_str(), &result) == DuckDBError) {
+            std::string err = duckdb_result_error(&result);
+            duckdb_destroy_result(&result);
+            stat_errors_.fetch_add(1);
+            return grpc::Status(grpc::StatusCode::INTERNAL, err);
+        }
 
-        duckdb::v1::QueryResponse response;
-        response.set_ipc_data(ipc_data);
-        writer->Write(response);
+        idx_t col_count = duckdb_column_count(&result);
+        idx_t row_count = duckdb_row_count(&result);
 
+        // First response: column schema
+        duckdb::v1::QueryResponse schema_response;
+        for (idx_t c = 0; c < col_count; ++c) {
+            auto* col_info = schema_response.add_columns();
+            col_info->set_name(duckdb_column_name(&result, c));
+
+            duckdb_type type = duckdb_column_type(&result, c);
+            switch (type) {
+                case DUCKDB_TYPE_BOOLEAN:   col_info->set_type("BOOLEAN"); break;
+                case DUCKDB_TYPE_TINYINT:   col_info->set_type("TINYINT"); break;
+                case DUCKDB_TYPE_SMALLINT:  col_info->set_type("SMALLINT"); break;
+                case DUCKDB_TYPE_INTEGER:   col_info->set_type("INTEGER"); break;
+                case DUCKDB_TYPE_BIGINT:    col_info->set_type("BIGINT"); break;
+                case DUCKDB_TYPE_FLOAT:     col_info->set_type("FLOAT"); break;
+                case DUCKDB_TYPE_DOUBLE:    col_info->set_type("DOUBLE"); break;
+                case DUCKDB_TYPE_VARCHAR:   col_info->set_type("VARCHAR"); break;
+                case DUCKDB_TYPE_TIMESTAMP: col_info->set_type("TIMESTAMP"); break;
+                case DUCKDB_TYPE_DATE:      col_info->set_type("DATE"); break;
+                case DUCKDB_TYPE_TIME:      col_info->set_type("TIME"); break;
+                case DUCKDB_TYPE_BLOB:      col_info->set_type("BLOB"); break;
+                case DUCKDB_TYPE_DECIMAL:   col_info->set_type("DECIMAL"); break;
+                default:                    col_info->set_type("UNKNOWN"); break;
+            }
+        }
+        writer->Write(schema_response);
+
+        // Stream rows in batches of 8192
+        const idx_t batch_size = 8192;
+        duckdb::v1::QueryResponse batch;
+        idx_t rows_in_batch = 0;
+
+        for (idx_t r = 0; r < row_count; ++r) {
+            auto* row = batch.add_rows();
+            for (idx_t c = 0; c < col_count; ++c) {
+                auto* val = row->add_values();
+                if (duckdb_value_is_null(&result, c, r)) {
+                    val->set_is_null(true);
+                } else {
+                    char* str = duckdb_value_varchar(&result, c, r);
+                    if (str) {
+                        val->set_text(str);
+                        duckdb_free(str);
+                    } else {
+                        val->set_is_null(true);
+                    }
+                }
+            }
+            rows_in_batch++;
+
+            if (rows_in_batch >= batch_size) {
+                writer->Write(batch);
+                batch.Clear();
+                rows_in_batch = 0;
+            }
+        }
+
+        // Flush remaining
+        if (rows_in_batch > 0) {
+            writer->Write(batch);
+        }
+
+        duckdb_destroy_result(&result);
         stat_queries_read_.fetch_add(1);
         return grpc::Status::OK;
+
     } catch (const std::exception& ex) {
         stat_errors_.fetch_add(1);
         return grpc::Status(grpc::StatusCode::INTERNAL, ex.what());
@@ -231,7 +211,7 @@ grpc::Status DuckGrpcServer::Execute(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Ping
+// Ping / GetStats
 // ─────────────────────────────────────────────────────────────────────────────
 
 grpc::Status DuckGrpcServer::Ping(
@@ -242,10 +222,6 @@ grpc::Status DuckGrpcServer::Ping(
     response->set_message("pong");
     return grpc::Status::OK;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GetStats
-// ─────────────────────────────────────────────────────────────────────────────
 
 grpc::Status DuckGrpcServer::GetStats(
     grpc::ServerContext* /*context*/,
