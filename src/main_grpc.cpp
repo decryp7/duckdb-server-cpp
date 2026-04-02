@@ -169,6 +169,29 @@ int main(int argc, char* argv[]) {
 
         builder.RegisterService(&service);
 
+        // ── gRPC performance tuning ──────────────────────────────────────
+        // Max message sizes (default 4MB can truncate large results)
+        builder.SetMaxReceiveMessageSize(64 * 1024 * 1024);
+        builder.SetMaxSendMessageSize(64 * 1024 * 1024);
+
+        // Completion queues and polling threads
+        unsigned hw = std::thread::hardware_concurrency();
+        if (!hw) hw = 4;
+        builder.SetSyncServerOption(
+            grpc::ServerBuilder::SyncServerOption::NUM_CQS, static_cast<int>(hw));
+        builder.SetSyncServerOption(
+            grpc::ServerBuilder::SyncServerOption::MIN_POLLERS, 2);
+        builder.SetSyncServerOption(
+            grpc::ServerBuilder::SyncServerOption::MAX_POLLERS, static_cast<int>(hw * 2));
+
+        // HTTP/2 tuning
+        builder.AddChannelArgument(GRPC_ARG_MAX_CONCURRENT_STREAMS, 200);
+        builder.AddChannelArgument(GRPC_ARG_HTTP2_WRITE_BUFFER_SIZE, 2 * 1024 * 1024);
+        builder.AddChannelArgument(GRPC_ARG_HTTP2_BDP_PROBE, 1);
+        builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIME_MS, 30000);
+        builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 10000);
+        builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+
         std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
         if (!server) {
             std::cerr << "[das] Failed to start gRPC server on " << address << "\n";

@@ -97,6 +97,10 @@ namespace DuckArrowServer
 
                         while (reader.Read())
                         {
+                            // Check client cancellation to avoid wasted work
+                            if (context.CancellationToken.IsCancellationRequested)
+                                return;
+
                             reader.GetValues(values);
 
                             for (int c = 0; c < colCount; c++)

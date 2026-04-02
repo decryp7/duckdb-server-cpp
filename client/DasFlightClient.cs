@@ -18,11 +18,23 @@ namespace DuckArrowClient
         private readonly DuckDbService.DuckDbServiceClient grpcClient;
         private int disposed;
 
+        // gRPC channel options for high performance
+        private static readonly ChannelOption[] HighPerfOptions = new[]
+        {
+            new ChannelOption(ChannelOptions.MaxConcurrentStreams, 200),
+            new ChannelOption(ChannelOptions.MaxReceiveMessageLength, 64 * 1024 * 1024),
+            new ChannelOption(ChannelOptions.MaxSendMessageLength, 64 * 1024 * 1024),
+            new ChannelOption("grpc.keepalive_time_ms", 30000),
+            new ChannelOption("grpc.keepalive_timeout_ms", 10000),
+            new ChannelOption("grpc.keepalive_permit_without_calls", 1),
+            new ChannelOption("grpc.http2.max_pings_without_data", 0),
+        };
+
         public DasFlightClient(string host = "localhost", int port = 17777)
-            : this(new Channel(host + ":" + port, ChannelCredentials.Insecure)) { }
+            : this(new Channel(host + ":" + port, ChannelCredentials.Insecure, HighPerfOptions)) { }
 
         public DasFlightClient(string host, int port, ChannelCredentials credentials)
-            : this(new Channel(host + ":" + port, credentials)) { }
+            : this(new Channel(host + ":" + port, credentials, HighPerfOptions)) { }
 
         private DasFlightClient(Channel channel)
         {

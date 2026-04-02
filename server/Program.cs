@@ -60,11 +60,30 @@ namespace DuckArrowServer
                 flightServer = new DuckFlightServer(config, readPool, writer);
 
                 var credentials = BuildCredentials(config);
-                grpcServer = new Server
+
+                // gRPC server performance tuning
+                var channelOptions = new[]
+                {
+                    new ChannelOption(ChannelOptions.MaxConcurrentStreams, 200),
+                    new ChannelOption(ChannelOptions.MaxReceiveMessageLength, 64 * 1024 * 1024),
+                    new ChannelOption(ChannelOptions.MaxSendMessageLength, 64 * 1024 * 1024),
+                    new ChannelOption("grpc.keepalive_time_ms", 30000),
+                    new ChannelOption("grpc.keepalive_timeout_ms", 10000),
+                    new ChannelOption("grpc.keepalive_permit_without_calls", 1),
+                    new ChannelOption("grpc.http2.max_pings_without_data", 0),
+                    new ChannelOption("grpc.http2_write_buffer_size", 2 * 1024 * 1024),
+                };
+
+                grpcServer = new Server(channelOptions)
                 {
                     Services = { flightServer.BuildGrpcService() },
                     Ports = { new ServerPort(config.Host, config.Port, credentials) }
                 };
+
+                // Grpc.Core thread pool tuning
+                GrpcEnvironment.SetThreadPoolSize(Environment.ProcessorCount * 2);
+                GrpcEnvironment.SetCompletionQueueCount(Environment.ProcessorCount);
+
                 grpcServer.Start();
 
                 PrintStartupBanner(config);
