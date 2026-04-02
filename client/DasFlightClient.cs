@@ -12,8 +12,8 @@ namespace DuckArrowClient
     /// Thread-safe gRPC client for the DuckDB server.
     /// Implements <see cref="IDasFlightClient"/>.
     ///
-    /// Uses the custom DuckDbService protocol (proto/duckdb_service.proto).
-    /// No Arrow dependency — results are returned as protobuf rows.
+    /// Uses typed protobuf values — no string parsing overhead for
+    /// numeric types (int, long, double, bool).
     /// </summary>
     public sealed class DasFlightClient : IDasFlightClient
     {
@@ -57,12 +57,8 @@ namespace DuckArrowClient
                     while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
                     {
                         var response = call.ResponseStream.Current;
-
-                        // First response has column metadata
                         if (response.Columns.Count > 0)
                             columns.AddRange(response.Columns);
-
-                        // Subsequent responses have row data
                         if (response.Rows.Count > 0)
                             allRows.AddRange(response.Rows);
                     }
@@ -86,13 +82,10 @@ namespace DuckArrowClient
         public async Task ExecuteAsync(string sql, CancellationToken ct = default)
         {
             EnsureNotDisposed();
-
             try
             {
-                var request = new ExecuteRequest { Sql = sql };
-                var response = await grpcClient.ExecuteAsync(request, cancellationToken: ct)
+                var response = await grpcClient.ExecuteAsync(new ExecuteRequest { Sql = sql }, cancellationToken: ct)
                     .ResponseAsync.ConfigureAwait(false);
-
                 if (!response.Success)
                     throw new DasException("Execute failed: " + response.Error);
             }
@@ -107,16 +100,13 @@ namespace DuckArrowClient
         public void Ping()
         {
             EnsureNotDisposed();
-
             try
             {
                 var response = Task.Run(async () =>
-                    await grpcClient.PingAsync(new PingRequest())
-                        .ResponseAsync.ConfigureAwait(false))
+                    await grpcClient.PingAsync(new PingRequest()).ResponseAsync.ConfigureAwait(false))
                     .GetAwaiter().GetResult();
-
                 if (response.Message != "pong")
-                    throw new DasException("Ping: unexpected response '" + response.Message + "'");
+                    throw new DasException("Ping: unexpected '" + response.Message + "'");
             }
             catch (RpcException ex)
             {
@@ -129,18 +119,14 @@ namespace DuckArrowClient
         public string GetStats()
         {
             EnsureNotDisposed();
-
             try
             {
-                var response = Task.Run(async () =>
-                    await grpcClient.GetStatsAsync(new StatsRequest())
-                        .ResponseAsync.ConfigureAwait(false))
+                var r = Task.Run(async () =>
+                    await grpcClient.GetStatsAsync(new StatsRequest()).ResponseAsync.ConfigureAwait(false))
                     .GetAwaiter().GetResult();
-
                 return string.Format(
                     "{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2},\"reader_pool_size\":{3},\"port\":{4}}}",
-                    response.QueriesRead, response.QueriesWrite, response.Errors,
-                    response.ReaderPoolSize, response.Port);
+                    r.QueriesRead, r.QueriesWrite, r.Errors, r.ReaderPoolSize, r.Port);
             }
             catch (RpcException ex)
             {
@@ -162,10 +148,12 @@ namespace DuckArrowClient
         }
     }
 
-    // ── Simple query result (replaces Arrow-based FlightQueryResult) ─────────
+    // ── QueryResult ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Query result backed by protobuf rows. No Arrow dependency.
+    /// Query result with typed value extraction.
+    /// Values are stored as protobuf TypedValue (oneof) — no string parsing needed
+    /// for int/long/double/bool columns.
     /// </summary>
     public sealed class QueryResult : IFlightQueryResult
     {
@@ -179,12 +167,28 @@ namespace DuckArrowClient
         }
 
         public int RowCount { get { return rows.Count; } }
-
         public int ColumnCount { get { return columns.Count; } }
-
         public string GetColumnName(int index) { return columns[index].Name; }
+        public string GetColumnType(int index) { return columns[index].Type.ToString(); }
 
-        public string GetColumnType(int index) { return columns[index].Type; }
+        /// <summary>
+        /// Extract the CLR value from a TypedValue.
+        /// Returns the native type (int, long, double, bool, string) — no parsing.
+        /// </summary>
+        private static object ExtractValue(TypedValue tv)
+        {
+            switch (tv.KindCase)
+            {
+                case TypedValue.KindOneofCase.IsNull:    return null;
+                case TypedValue.KindOneofCase.BoolValue:   return tv.BoolValue;
+                case TypedValue.KindOneofCase.Int32Value:   return tv.Int32Value;
+                case TypedValue.KindOneofCase.Int64Value:   return tv.Int64Value;
+                case TypedValue.KindOneofCase.DoubleValue:  return tv.DoubleValue;
+                case TypedValue.KindOneofCase.StringValue:  return tv.StringValue;
+                case TypedValue.KindOneofCase.BlobValue:    return tv.BlobValue.ToByteArray();
+                default:                                     return null;
+            }
+        }
 
         public List<Dictionary<string, object>> ToRows()
         {
@@ -193,10 +197,7 @@ namespace DuckArrowClient
             {
                 var dict = new Dictionary<string, object>(columns.Count);
                 for (int c = 0; c < columns.Count && c < row.Values.Count; c++)
-                {
-                    var val = row.Values[c];
-                    dict[columns[c].Name] = val.IsNull ? null : (object)val.Text;
-                }
+                    dict[columns[c].Name] = ExtractValue(row.Values[c]);
                 result.Add(dict);
             }
             return result;
@@ -205,22 +206,48 @@ namespace DuckArrowClient
         public DataTable ToDataTable(string tableName = "Result")
         {
             var dt = new DataTable(tableName);
+
+            // Create typed columns based on proto ColumnType.
             foreach (var col in columns)
-                dt.Columns.Add(col.Name, typeof(string));
+                dt.Columns.Add(col.Name, MapToClrType(col.Type));
 
             foreach (var row in rows)
             {
                 var dr = dt.NewRow();
                 for (int c = 0; c < columns.Count && c < row.Values.Count; c++)
                 {
-                    var val = row.Values[c];
-                    dr[c] = val.IsNull ? (object)DBNull.Value : val.Text;
+                    var val = ExtractValue(row.Values[c]);
+                    dr[c] = val ?? (object)DBNull.Value;
                 }
                 dt.Rows.Add(dr);
             }
             return dt;
         }
 
-        public void Dispose() { /* nothing to dispose — plain data */ }
+        /// <summary>
+        /// Map proto ColumnType to CLR type for DataTable column creation.
+        /// </summary>
+        private static Type MapToClrType(ColumnType ct)
+        {
+            switch (ct)
+            {
+                case ColumnType.TypeBoolean:  return typeof(bool);
+                case ColumnType.TypeInt8:
+                case ColumnType.TypeInt16:
+                case ColumnType.TypeInt32:
+                case ColumnType.TypeUint8:
+                case ColumnType.TypeUint16:   return typeof(int);
+                case ColumnType.TypeInt64:
+                case ColumnType.TypeUint32:
+                case ColumnType.TypeUint64:   return typeof(long);
+                case ColumnType.TypeFloat:
+                case ColumnType.TypeDouble:
+                case ColumnType.TypeDecimal:  return typeof(double);
+                case ColumnType.TypeBlob:     return typeof(byte[]);
+                default:                      return typeof(string);
+            }
+        }
+
+        public void Dispose() { /* plain data, nothing to dispose */ }
     }
 }

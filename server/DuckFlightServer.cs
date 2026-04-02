@@ -7,8 +7,13 @@ using Grpc.Core;
 namespace DuckArrowServer
 {
     /// <summary>
-    /// DuckDB gRPC server implementing the generated DuckDbService.
-    /// Uses plain DataReader for query results — no Arrow dependency.
+    /// DuckDB gRPC server — extreme performance edition.
+    ///
+    /// Key optimizations:
+    ///   - Typed values (int64/double/bool) skip ToString/Parse entirely
+    ///   - GetValues() bulk reads all columns in one call
+    ///   - Column type mapping cached per query (not per row)
+    ///   - Shared null TypedValue instance (no allocation per null cell)
     /// </summary>
     public sealed class DuckFlightServer : DuckDbService.DuckDbServiceBase, IDisposable
     {
@@ -21,6 +26,9 @@ namespace DuckArrowServer
         private long errors;
 
         private readonly int batchSize;
+
+        // Shared null value — reused across all rows to avoid allocation.
+        private static readonly TypedValue NullValue = new TypedValue { IsNull = true };
 
         public DuckFlightServer(ServerConfig config, IConnectionPool readPool, IWriteSerializer writer)
         {
@@ -47,7 +55,7 @@ namespace DuckArrowServer
             };
         }
 
-        // ── Query: stream rows ───────────────────────────────────────────────
+        // ── Query: stream typed rows ─────────────────────────────────────────
 
         public override async Task Query(
             QueryRequest request,
@@ -66,43 +74,36 @@ namespace DuckArrowServer
                     {
                         int colCount = reader.FieldCount;
 
-                        // First response: column schema
+                        // Map CLR types to proto ColumnType (cached for all rows).
+                        var colTypes = new ColumnType[colCount];
+                        var clrTypes = new Type[colCount];
                         var schemaResponse = new QueryResponse();
+
                         for (int c = 0; c < colCount; c++)
                         {
+                            clrTypes[c] = reader.GetFieldType(c);
+                            colTypes[c] = MapColumnType(clrTypes[c]);
                             schemaResponse.Columns.Add(new ColumnInfo
                             {
                                 Name = reader.GetName(c),
-                                Type = reader.GetDataTypeName(c)
+                                Type = colTypes[c]
                             });
                         }
                         await responseStream.WriteAsync(schemaResponse).ConfigureAwait(false);
 
-                        // Shared null value — avoid allocating one per null cell.
-                        var nullValue = new Value { IsNull = true };
-
-                        // Stream rows in batches
+                        // Stream rows with typed values — no ToString overhead.
                         var batch = new QueryResponse();
                         int rowsInBatch = 0;
-
-                        // Pre-allocate object array for GetValues (avoids per-cell GetValue boxing)
                         var values = new object[colCount];
 
                         while (reader.Read())
                         {
-                            reader.GetValues(values); // bulk read — one call instead of N
+                            reader.GetValues(values);
 
                             var row = new Row();
                             for (int c = 0; c < colCount; c++)
                             {
-                                if (values[c] == null || values[c] is DBNull)
-                                {
-                                    row.Values.Add(nullValue);
-                                }
-                                else
-                                {
-                                    row.Values.Add(new Value { Text = values[c].ToString() });
-                                }
+                                row.Values.Add(ConvertToTypedValue(values[c], colTypes[c]));
                             }
                             batch.Rows.Add(row);
                             rowsInBatch++;
@@ -135,12 +136,81 @@ namespace DuckArrowServer
             }
         }
 
-        // ── Execute ──────────────────────────────────────────────────────────
+        // ── Type mapping ─────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Convert a CLR value to a TypedValue without ToString().
+        /// int/long/double/bool are encoded as native protobuf types (binary).
+        /// Only strings and unknown types use ToString() as fallback.
+        /// </summary>
+        private static TypedValue ConvertToTypedValue(object value, ColumnType colType)
+        {
+            if (value == null || value is DBNull)
+                return NullValue;
+
+            switch (colType)
+            {
+                case ColumnType.TypeBoolean:
+                    return new TypedValue { BoolValue = Convert.ToBoolean(value) };
+
+                case ColumnType.TypeInt32:
+                case ColumnType.TypeInt8:
+                case ColumnType.TypeInt16:
+                case ColumnType.TypeUint8:
+                case ColumnType.TypeUint16:
+                    return new TypedValue { Int32Value = Convert.ToInt32(value) };
+
+                case ColumnType.TypeInt64:
+                case ColumnType.TypeUint32:
+                case ColumnType.TypeUint64:
+                    return new TypedValue { Int64Value = Convert.ToInt64(value) };
+
+                case ColumnType.TypeFloat:
+                case ColumnType.TypeDouble:
+                case ColumnType.TypeDecimal:
+                    return new TypedValue { DoubleValue = Convert.ToDouble(value) };
+
+                case ColumnType.TypeBlob:
+                    if (value is byte[] bytes)
+                        return new TypedValue { BlobValue = Google.Protobuf.ByteString.CopyFrom(bytes) };
+                    return new TypedValue { StringValue = value.ToString() };
+
+                default:
+                    // String, timestamp, date, time, unknown — use ToString as fallback.
+                    return new TypedValue { StringValue = value.ToString() };
+            }
+        }
+
+        /// <summary>
+        /// Map CLR type to proto ColumnType. Called once per column per query.
+        /// </summary>
+        private static ColumnType MapColumnType(Type clrType)
+        {
+            if (clrType == typeof(bool))           return ColumnType.TypeBoolean;
+            if (clrType == typeof(sbyte))          return ColumnType.TypeInt8;
+            if (clrType == typeof(short))          return ColumnType.TypeInt16;
+            if (clrType == typeof(int))            return ColumnType.TypeInt32;
+            if (clrType == typeof(long))           return ColumnType.TypeInt64;
+            if (clrType == typeof(byte))           return ColumnType.TypeUint8;
+            if (clrType == typeof(ushort))         return ColumnType.TypeUint16;
+            if (clrType == typeof(uint))           return ColumnType.TypeUint32;
+            if (clrType == typeof(ulong))          return ColumnType.TypeUint64;
+            if (clrType == typeof(float))          return ColumnType.TypeFloat;
+            if (clrType == typeof(double))         return ColumnType.TypeDouble;
+            if (clrType == typeof(decimal))        return ColumnType.TypeDecimal;
+            if (clrType == typeof(string))         return ColumnType.TypeString;
+            if (clrType == typeof(byte[]))         return ColumnType.TypeBlob;
+            if (clrType == typeof(DateTime))       return ColumnType.TypeTimestamp;
+            if (clrType == typeof(DateTimeOffset)) return ColumnType.TypeTimestamp;
+            if (clrType == typeof(TimeSpan))       return ColumnType.TypeTime;
+            return ColumnType.TypeString; // fallback
+        }
+
+        // ── Execute / Ping / GetStats ────────────────────────────────────────
 
         public override Task<ExecuteResponse> Execute(ExecuteRequest request, ServerCallContext context)
         {
             string sql = request.Sql;
-
             if (string.IsNullOrEmpty(sql))
             {
                 Interlocked.Increment(ref errors);
@@ -158,14 +228,10 @@ namespace DuckArrowServer
             return Task.FromResult(new ExecuteResponse { Success = true });
         }
 
-        // ── Ping ─────────────────────────────────────────────────────────────
-
         public override Task<PingResponse> Ping(PingRequest request, ServerCallContext context)
         {
             return Task.FromResult(new PingResponse { Message = "pong" });
         }
-
-        // ── GetStats ─────────────────────────────────────────────────────────
 
         public override Task<StatsResponse> GetStats(StatsRequest request, ServerCallContext context)
         {
@@ -179,8 +245,6 @@ namespace DuckArrowServer
                 Port = s.Port
             });
         }
-
-        // ── Dispose ──────────────────────────────────────────────────────────
 
         private int disposed;
 
