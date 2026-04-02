@@ -83,6 +83,7 @@ impl DuckDbService for DuckDbServerImpl {
 
         let sharded = self.sharded_db.clone();
         let cache = self.query_cache.clone();
+        let sql_key = sql.clone();
         let _batch_size = self.batch_size;
         let stat_reads = self.stat_reads.clone();
         let stat_errors = self.stat_errors.clone();
@@ -134,6 +135,7 @@ impl DuckDbService for DuckDbServerImpl {
             };
 
             let mut first_batch = true;
+            let mut to_cache = Vec::new();
 
             for batch in &batches {
                 let mut resp = QueryResponse {
@@ -149,6 +151,7 @@ impl DuckDbService for DuckDbServerImpl {
                     resp.data.push(cd);
                 }
 
+                to_cache.push(resp.clone());
                 if tx.blocking_send(Ok(resp)).is_err() { return; }
             }
 
@@ -159,11 +162,12 @@ impl DuckDbService for DuckDbServerImpl {
                     data: Vec::new(),
                     row_count: 0,
                 };
+                to_cache.push(resp.clone());
                 let _ = tx.blocking_send(Ok(resp));
             }
 
-            // Cache the responses for future hits
-            // (collected_responses would need to be tracked — simplified: skip caching in spawn_blocking)
+            // Cache for future hits
+            cache.put(sql_key, to_cache);
             stat_reads.fetch_add(1, Ordering::Relaxed);
         });
 
@@ -192,13 +196,17 @@ impl DuckDbService for DuckDbServerImpl {
 
     async fn bulk_insert(&self, request: Request<BulkInsertRequest>) -> Result<Response<BulkInsertResponse>, Status> {
         let req = request.into_inner();
-        // BulkInsert: use first shard's writer (fan-out not practical for bulk)
-        let shard_writer = self.sharded_db.next_for_read().writer.clone();
+        // BulkInsert: build SQL then fan-out to ALL shards via write_to_all
+        let sharded = self.sharded_db.clone();
         let result = tokio::task::spawn_blocking(move || {
-            shard_writer.bulk_insert(&req.table, &req.columns, &req.data, req.row_count as usize)
+            let sql = crate::writer::build_bulk_insert_sql(
+                &req.table, &req.columns, &req.data, req.row_count as usize)?;
+            sharded.write_to_all(&sql)?;
+            Ok::<usize, String>(req.row_count as usize)
         }).await.map_err(|e| Status::internal(e.to_string()))?;
         match result {
             Ok(count) => {
+                self.query_cache.invalidate();
                 self.stat_writes.fetch_add(1, Ordering::Relaxed);
                 Ok(Response::new(BulkInsertResponse { success: true, error: String::new(), rows_inserted: count as i64 }))
             }

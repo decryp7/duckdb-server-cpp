@@ -48,13 +48,26 @@ impl ConnectionPool {
         for i in 1..size {
             let clone = first.try_clone()
                 .map_err(|e| format!("Failed to clone connection {}/{}: {}", i + 1, size, e))?;
+            Self::apply_connection_pragmas(&clone);
             queue.push(clone).map_err(|_| "Queue full".to_string())?;
         }
 
         // Push the original as the last one
+        Self::apply_connection_pragmas(&first);
         queue.push(first).map_err(|_| "Queue full".to_string())?;
 
         Ok(Self { queue, size })
+    }
+
+    /// Apply per-connection performance settings.
+    /// threads=1 eliminates internal contention (pool provides parallelism).
+    /// preserve_insertion_order=false speeds up scans without ORDER BY.
+    /// enable_object_cache caches metadata for faster lookups.
+    fn apply_connection_pragmas(conn: &Connection) {
+        let _ = conn.execute_batch("SET threads=1");
+        let _ = conn.execute_batch("SET preserve_insertion_order=false");
+        let _ = conn.execute_batch("PRAGMA enable_object_cache");
+        let _ = conn.execute_batch("SET checkpoint_threshold='256MB'");
     }
 
     pub fn borrow(&self) -> Result<Handle, String> {

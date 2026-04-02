@@ -81,6 +81,69 @@ impl WriteSerializer {
     }
 }
 
+pub fn build_bulk_insert_sql(
+    table: &str, columns: &[ColumnMeta], data: &[ColumnData], row_count: usize,
+) -> Result<String, String> {
+    let col_count = columns.len();
+    if col_count == 0 || data.len() != col_count {
+        return Err("column count mismatch".into());
+    }
+    let mut sql = String::with_capacity(row_count * col_count * 10);
+    for r in 0..row_count {
+        if r == 0 {
+            sql.push_str("INSERT INTO ");
+            sql.push_str(table);
+            sql.push_str(" VALUES (");
+        } else {
+            sql.push_str(", (");
+        }
+        for c in 0..col_count {
+            if c > 0 { sql.push_str(", "); }
+            let cd = &data[c];
+            let is_null = cd.null_indices.iter().any(|&n| n == r as i32);
+            if is_null { sql.push_str("NULL"); continue; }
+
+            match columns[c].r#type() {
+                crate::proto::ColumnType::TypeBoolean => {
+                    let v = cd.bool_values.get(r).copied().unwrap_or(false);
+                    sql.push_str(if v { "true" } else { "false" });
+                }
+                crate::proto::ColumnType::TypeInt8
+                | crate::proto::ColumnType::TypeInt16
+                | crate::proto::ColumnType::TypeInt32
+                | crate::proto::ColumnType::TypeUint8
+                | crate::proto::ColumnType::TypeUint16 => {
+                    let v = cd.int32_values.get(r).copied().unwrap_or(0);
+                    sql.push_str(&v.to_string());
+                }
+                crate::proto::ColumnType::TypeInt64
+                | crate::proto::ColumnType::TypeUint32
+                | crate::proto::ColumnType::TypeUint64 => {
+                    let v = cd.int64_values.get(r).copied().unwrap_or(0);
+                    sql.push_str(&v.to_string());
+                }
+                crate::proto::ColumnType::TypeFloat => {
+                    let v = cd.float_values.get(r).copied().unwrap_or(0.0);
+                    sql.push_str(&v.to_string());
+                }
+                crate::proto::ColumnType::TypeDouble
+                | crate::proto::ColumnType::TypeDecimal => {
+                    let v = cd.double_values.get(r).copied().unwrap_or(0.0);
+                    sql.push_str(&v.to_string());
+                }
+                _ => {
+                    sql.push('\'');
+                    let s = cd.string_values.get(r).map(|s| s.as_str()).unwrap_or("");
+                    sql.push_str(&s.replace('\'', "''"));
+                    sql.push('\'');
+                }
+            }
+        }
+        sql.push(')');
+    }
+    Ok(sql)
+}
+
 fn drain_loop(conn: Connection, rx: mpsc::Receiver<WriteRequest>, batch_ms: u64, batch_max: usize) {
     loop {
         let first = match rx.recv() { Ok(r) => r, Err(_) => return };

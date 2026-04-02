@@ -32,15 +32,6 @@ impl ShardedDuckDb {
 
             let pool = Arc::new(ConnectionPool::new(&path, readers_per_shard)?);
 
-            // Apply DuckDB tuning on first connection
-            {
-                let conn = pool.borrow().map_err(|e| e)?;
-                let _ = conn.execute_batch("SET threads=1");
-                let _ = conn.execute_batch("PRAGMA enable_object_cache");
-                let _ = conn.execute_batch("SET preserve_insertion_order=false");
-                let _ = conn.execute_batch("SET checkpoint_threshold='256MB'");
-            }
-
             let writer = {
                 let conn = pool.borrow().map_err(|e| e)?;
                 Arc::new(WriteSerializer::from_conn(&conn, batch_ms, batch_max)?)
