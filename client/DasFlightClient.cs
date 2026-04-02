@@ -4,7 +4,6 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
-using Apache.Arrow.Ipc;
 using DuckDbProto;
 using Grpc.Core;
 
@@ -14,15 +13,16 @@ namespace DuckArrowClient
     /// Thread-safe gRPC client for the DuckDB server.
     /// Implements <see cref="IDasFlightClient"/>.
     ///
-    /// Uses the custom DuckDbService protocol (proto/duckdb_service.proto).
-    /// Compatible with any server implementing the same proto (C# or C++).
+    /// Uses the auto-generated DuckDbService.DuckDbServiceClient from
+    /// proto/duckdb_service.proto (via Grpc.Tools codegen).
     ///
+    /// Compatible with any server implementing the same proto (C# or C++).
     /// One instance per application — HTTP/2 handles all concurrency.
     /// </summary>
     public sealed class DasFlightClient : IDasFlightClient
     {
         private readonly Channel channel;
-        private readonly CallInvoker invoker;
+        private readonly DuckDbService.DuckDbServiceClient grpcClient;
         private int disposed;
 
         // ── Construction ─────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ namespace DuckArrowClient
         private DasFlightClient(Channel channel)
         {
             this.channel = channel;
-            this.invoker = channel.CreateCallInvoker();
+            this.grpcClient = new DuckDbService.DuckDbServiceClient(channel);
         }
 
         // ── Query ────────────────────────────────────────────────────────────
@@ -58,16 +58,14 @@ namespace DuckArrowClient
             try
             {
                 var request = new QueryRequest { Sql = sql };
-                using (var call = invoker.AsyncServerStreamingCall(
-                    DuckDbService.QueryMethod, null, new CallOptions(cancellationToken: ct), request))
+                using (var call = grpcClient.Query(request, cancellationToken: ct))
                 {
                     while (await call.ResponseStream.MoveNext(ct).ConfigureAwait(false))
                     {
-                        byte[] ipcData = call.ResponseStream.Current.IpcData;
+                        var ipcData = call.ResponseStream.Current.IpcData;
                         if (ipcData == null || ipcData.Length == 0) continue;
 
-                        // Each chunk is a complete Arrow IPC stream.
-                        using (var ms = new MemoryStream(ipcData))
+                        using (var ms = new MemoryStream(ipcData.ToByteArray()))
                         using (var ipcReader = new Apache.Arrow.Ipc.ArrowStreamReader(ms))
                         {
                             RecordBatch batch;
@@ -117,9 +115,8 @@ namespace DuckArrowClient
             try
             {
                 var request = new ExecuteRequest { Sql = sql };
-                var call = invoker.AsyncUnaryCall(
-                    DuckDbService.ExecuteMethod, null, new CallOptions(cancellationToken: ct), request);
-                var response = await call.ResponseAsync.ConfigureAwait(false);
+                var response = await grpcClient.ExecuteAsync(request, cancellationToken: ct)
+                    .ResponseAsync.ConfigureAwait(false);
 
                 if (!response.Success)
                     throw new DasException("Execute failed: " + response.Error);
@@ -139,11 +136,9 @@ namespace DuckArrowClient
             try
             {
                 var response = Task.Run(async () =>
-                {
-                    var call = invoker.AsyncUnaryCall(
-                        DuckDbService.PingMethod, null, new CallOptions(), new PingRequest());
-                    return await call.ResponseAsync.ConfigureAwait(false);
-                }).GetAwaiter().GetResult();
+                    await grpcClient.PingAsync(new PingRequest())
+                        .ResponseAsync.ConfigureAwait(false))
+                    .GetAwaiter().GetResult();
 
                 if (response.Message != "pong")
                     throw new DasException("Ping: unexpected response '" + response.Message + "'");
@@ -163,13 +158,14 @@ namespace DuckArrowClient
             try
             {
                 var response = Task.Run(async () =>
-                {
-                    var call = invoker.AsyncUnaryCall(
-                        DuckDbService.StatsMethod, null, new CallOptions(), new StatsRequest());
-                    return await call.ResponseAsync.ConfigureAwait(false);
-                }).GetAwaiter().GetResult();
+                    await grpcClient.GetStatsAsync(new StatsRequest())
+                        .ResponseAsync.ConfigureAwait(false))
+                    .GetAwaiter().GetResult();
 
-                return response.ToJson();
+                return string.Format(
+                    "{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2},\"reader_pool_size\":{3},\"port\":{4}}}",
+                    response.QueriesRead, response.QueriesWrite, response.Errors,
+                    response.ReaderPoolSize, response.Port);
             }
             catch (RpcException ex)
             {

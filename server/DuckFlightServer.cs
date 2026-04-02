@@ -10,13 +10,13 @@ using Grpc.Core;
 namespace DuckArrowServer
 {
     /// <summary>
-    /// DuckDB gRPC server using the custom DuckDbService protocol.
-    /// Uses Arrow IPC for streaming query results.
+    /// DuckDB gRPC server implementing the generated DuckDbService.
+    /// Code is auto-generated from proto/duckdb_service.proto via Grpc.Tools.
     ///
-    /// Compatible with any client generated from proto/duckdb_service.proto
+    /// Compatible with any client generated from the same proto file
     /// (C#, C++, Python, Go, Java, etc.).
     /// </summary>
-    public sealed class DuckFlightServer : IDisposable
+    public sealed class DuckFlightServer : DuckDbService.DuckDbServiceBase, IDisposable
     {
         private readonly ServerConfig config;
         private readonly IConnectionPool readPool;
@@ -37,16 +37,11 @@ namespace DuckArrowServer
         }
 
         /// <summary>
-        /// Create the gRPC ServerServiceDefinition using typed marshallers.
+        /// Create the gRPC ServerServiceDefinition using the generated BindService.
         /// </summary>
         public ServerServiceDefinition BuildGrpcService()
         {
-            return ServerServiceDefinition.CreateBuilder()
-                .AddMethod(DuckDbService.QueryMethod, HandleQuery)
-                .AddMethod(DuckDbService.ExecuteMethod, HandleExecute)
-                .AddMethod(DuckDbService.PingMethod, HandlePing)
-                .AddMethod(DuckDbService.StatsMethod, HandleGetStats)
-                .Build();
+            return DuckDbService.BindService(this);
         }
 
         public ServerStats GetStats()
@@ -63,7 +58,7 @@ namespace DuckArrowServer
 
         // ── Query: stream Arrow IPC results ──────────────────────────────────
 
-        private async Task HandleQuery(
+        public override async Task Query(
             QueryRequest request,
             IServerStreamWriter<QueryResponse> responseStream,
             ServerCallContext context)
@@ -80,53 +75,34 @@ namespace DuckArrowServer
                     {
                         var schema = RecordBatchBuilder.BuildSchema(reader);
 
-                        // Write the entire result as an Arrow IPC stream.
-                        // Each QueryResponse chunk contains a piece of the IPC stream.
-                        using (var ms = new MemoryStream())
+                        // Write each batch as a complete Arrow IPC stream chunk.
+                        RecordBatch batch;
+                        while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
                         {
-                            var ipcWriter = new ArrowStreamWriter(ms, schema, leaveOpen: true);
-
-                            // Write schema.
-                            await ipcWriter.WriteStartAsync().ConfigureAwait(false);
-
-                            // Write batches.
-                            RecordBatch batch;
-                            while ((batch = RecordBatchBuilder.ReadNextBatch(reader, schema, batchSize)) != null)
+                            byte[] chunk;
+                            try
                             {
-                                try
-                                {
-                                    await ipcWriter.WriteRecordBatchAsync(batch).ConfigureAwait(false);
-                                }
-                                finally
-                                {
-                                    batch.Dispose();
-                                }
-
-                                // Flush what we have so far as a chunk.
-                                await ipcWriter.WriteEndAsync().ConfigureAwait(false);
-                                ipcWriter.Dispose();
-
-                                byte[] chunk = ms.ToArray();
-                                ms.SetLength(0);
-
-                                await responseStream.WriteAsync(new QueryResponse { IpcData = chunk })
-                                    .ConfigureAwait(false);
-
-                                // Start a new IPC stream for the next chunk.
-                                ipcWriter = new ArrowStreamWriter(ms, schema, leaveOpen: true);
-                                await ipcWriter.WriteStartAsync().ConfigureAwait(false);
+                                chunk = SerializeToIpc(batch, schema);
+                            }
+                            finally
+                            {
+                                batch.Dispose();
                             }
 
-                            // Final empty stream (schema only) for queries with no remaining batches.
-                            await ipcWriter.WriteEndAsync().ConfigureAwait(false);
-                            ipcWriter.Dispose();
-
-                            byte[] finalChunk = ms.ToArray();
-                            if (finalChunk.Length > 0)
+                            await responseStream.WriteAsync(new QueryResponse
                             {
-                                await responseStream.WriteAsync(new QueryResponse { IpcData = finalChunk })
-                                    .ConfigureAwait(false);
-                            }
+                                IpcData = Google.Protobuf.ByteString.CopyFrom(chunk)
+                            }).ConfigureAwait(false);
+                        }
+
+                        // If no batches were sent, send schema-only chunk so client gets the schema.
+                        if (Interlocked.Read(ref queriesRead) >= 0) // always true, just to avoid "unreachable" warning
+                        {
+                            byte[] schemaChunk = SerializeSchemaOnlyIpc(schema);
+                            await responseStream.WriteAsync(new QueryResponse
+                            {
+                                IpcData = Google.Protobuf.ByteString.CopyFrom(schemaChunk)
+                            }).ConfigureAwait(false);
                         }
                     }
                 }
@@ -146,29 +122,21 @@ namespace DuckArrowServer
 
         // ── Execute: DML/DDL ─────────────────────────────────────────────────
 
-        private Task<ExecuteResponse> HandleExecute(ExecuteRequest request, ServerCallContext context)
+        public override Task<ExecuteResponse> Execute(ExecuteRequest request, ServerCallContext context)
         {
             string sql = request.Sql;
 
             if (string.IsNullOrEmpty(sql))
             {
                 Interlocked.Increment(ref errors);
-                return Task.FromResult(new ExecuteResponse
-                {
-                    Success = false,
-                    Error = "SQL statement is required"
-                });
+                return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL statement is required" });
             }
 
             var result = writer.Submit(sql);
             if (!result.Ok)
             {
                 Interlocked.Increment(ref errors);
-                return Task.FromResult(new ExecuteResponse
-                {
-                    Success = false,
-                    Error = result.Error
-                });
+                return Task.FromResult(new ExecuteResponse { Success = false, Error = result.Error });
             }
 
             Interlocked.Increment(ref queriesWrite);
@@ -177,14 +145,14 @@ namespace DuckArrowServer
 
         // ── Ping ─────────────────────────────────────────────────────────────
 
-        private Task<PingResponse> HandlePing(PingRequest request, ServerCallContext context)
+        public override Task<PingResponse> Ping(PingRequest request, ServerCallContext context)
         {
             return Task.FromResult(new PingResponse { Message = "pong" });
         }
 
         // ── Stats ────────────────────────────────────────────────────────────
 
-        private Task<StatsResponse> HandleGetStats(StatsRequest request, ServerCallContext context)
+        public override Task<StatsResponse> GetStats(StatsRequest request, ServerCallContext context)
         {
             var s = GetStats();
             return Task.FromResult(new StatsResponse
@@ -195,6 +163,32 @@ namespace DuckArrowServer
                 ReaderPoolSize = s.ReaderPoolSize,
                 Port = s.Port
             });
+        }
+
+        // ── IPC serialization ────────────────────────────────────────────────
+
+        private static byte[] SerializeToIpc(RecordBatch batch, Schema schema)
+        {
+            using (var ms = new MemoryStream())
+            {
+                var w = new ArrowStreamWriter(ms, schema, leaveOpen: true);
+                w.WriteRecordBatchAsync(batch).Wait();
+                w.WriteEndAsync().Wait();
+                w.Dispose();
+                return ms.ToArray();
+            }
+        }
+
+        private static byte[] SerializeSchemaOnlyIpc(Schema schema)
+        {
+            using (var ms = new MemoryStream())
+            {
+                var w = new ArrowStreamWriter(ms, schema, leaveOpen: true);
+                w.WriteStartAsync().Wait();
+                w.WriteEndAsync().Wait();
+                w.Dispose();
+                return ms.ToArray();
+            }
         }
 
         // ── Dispose ──────────────────────────────────────────────────────────
