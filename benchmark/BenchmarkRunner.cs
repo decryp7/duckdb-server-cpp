@@ -39,7 +39,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("  Starting: {0} concurrent readers, {1} ops each, {2} rows per query...",
                 concurrency, opsPerClient, rowCount);
 
-            using (var client = new DuckDbClient(host, port))
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
             {
                 RunWarmup(client, sql);
 
@@ -98,7 +98,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("  Starting: {0} concurrent writers, {1} INSERTs each ({2} total)...",
                 concurrency, opsPerClient, concurrency * opsPerClient);
 
-            using (var client = new DuckDbClient(host, port))
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
             {
                 client.Execute("DROP TABLE IF EXISTS bench_write");
                 client.Execute("CREATE TABLE bench_write (id INTEGER, value DOUBLE, label TEXT)");
@@ -174,7 +174,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("  Starting: {0} readers + {1} writers, {2} ops each...",
                 readers, writers, opsPerClient);
 
-            using (var client = new DuckDbClient(host, port))
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
             {
                 client.Execute("DROP TABLE IF EXISTS bench_mixed");
                 client.Execute("CREATE TABLE bench_mixed (id INTEGER, data TEXT)");
@@ -249,7 +249,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("  Starting: streaming {0:N0} rows ({1:F0} MB est.) x {2} iterations...",
                 rowCount, estimatedMb, iterations);
 
-            using (var client = new DuckDbClient(host, port))
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
             {
                 RunWarmup(client, "SELECT 1");
 
@@ -359,7 +359,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("  Starting: {0} threads x {1}s sustained {2}...",
                 concurrency, durationSeconds, kind.ToLower());
 
-            using (var client = new DuckDbClient(host, port))
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
             {
                 if (!isReader)
                 {

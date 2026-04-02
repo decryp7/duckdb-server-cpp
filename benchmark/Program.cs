@@ -305,7 +305,7 @@ namespace DuckDbBenchmark
             Console.Write("  Connecting to {0}:{1}... ", host, port);
             try
             {
-                using (var client = new DuckDbClient(host, port))
+                using (var client = new DuckDbClient.DuckDbClient(host, port))
                 {
                     client.Ping();
                     string stats = client.GetStats();
