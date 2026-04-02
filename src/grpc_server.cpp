@@ -470,7 +470,8 @@ grpc::Status DuckGrpcServer::BulkInsert(
     try {
         // Create appender — bypasses SQL parser entirely
         duckdb_appender appender = nullptr;
-        if (duckdb_appender_create(writer_conn_, nullptr, table.c_str(), &appender) == DuckDBError) {
+        auto& shard = *shards_[0]; // Use first shard for bulk insert
+        if (duckdb_appender_create(shard.writer_conn, nullptr, table.c_str(), &appender) == DuckDBError) {
             std::string err = "Appender creation failed for table: " + table;
             const char* appender_err = duckdb_appender_error(appender);
             if (appender_err) err = appender_err;
