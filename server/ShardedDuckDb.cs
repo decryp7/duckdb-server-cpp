@@ -1,32 +1,32 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DuckDbServer
 {
     /// <summary>
-    /// Sharded DuckDB: multiple independent database instances with round-robin dispatch.
+    /// Sharded DuckDB with read-all / write-one strategy.
     ///
-    /// Why sharding helps:
-    ///   Each DuckDB instance has its own internal lock for writes and its own
-    ///   thread pool. With a single instance, 100 concurrent queries compete
-    ///   for one lock. With 4 shards, each shard handles ~25 queries — 4x less
-    ///   contention, 4x more effective parallelism.
+    /// READ:  Round-robin across all shards. Each shard has a full data copy.
+    ///        N shards = N× read throughput.
+    ///
+    /// WRITE: Fan-out to ALL shards. Every shard executes the same write.
+    ///        Data stays consistent across all shards.
+    ///        Write throughput = single shard speed (but reads scale).
     ///
     /// Architecture:
-    ///   Shard 0: DatabaseManager + ConnectionPool + WriteSerializer
-    ///   Shard 1: DatabaseManager + ConnectionPool + WriteSerializer
-    ///   ...
-    ///   Shard N: DatabaseManager + ConnectionPool + WriteSerializer
+    ///   Shard 0: [full data] ← reads (round-robin) + writes (fan-out)
+    ///   Shard 1: [full data] ← reads (round-robin) + writes (fan-out)
+    ///   Shard 2: [full data] ← reads (round-robin) + writes (fan-out)
+    ///   Shard 3: [full data] ← reads (round-robin) + writes (fan-out)
     ///
-    /// Queries are dispatched round-robin (atomic counter mod shard count).
-    /// For :memory: databases, each shard is fully independent.
-    /// For file databases, each shard uses a separate .duckdb file:
-    ///   data.duckdb → data_0.duckdb, data_1.duckdb, data_2.duckdb, ...
+    /// For :memory: databases, each shard is independent (no shared state).
+    /// For file databases, each shard uses a separate file.
     /// </summary>
     public sealed class ShardedDuckDb : IDisposable
     {
         private readonly Shard[] shards;
-        private long nextShard; // atomic round-robin counter
+        private long nextReadShard; // atomic round-robin for reads
 
         public int ShardCount { get { return shards.Length; } }
         public int TotalPoolSize { get; }
@@ -37,7 +37,7 @@ namespace DuckDbServer
             int readersPerShard = Math.Max(1, config.ReaderPoolSize / shardCount);
 
             shards = new Shard[shardCount];
-            nextShard = 0;
+            nextReadShard = -1;
 
             for (int i = 0; i < shardCount; i++)
             {
@@ -57,27 +57,61 @@ namespace DuckDbServer
 
             TotalPoolSize = readersPerShard * shardCount;
 
-            Console.WriteLine("[das] Sharded DuckDB: {0} shards × {1} readers = {2} total connections",
-                shardCount, readersPerShard, TotalPoolSize);
+            Console.WriteLine("[das] Sharded DuckDB (read-all / write-all):");
+            Console.WriteLine("      shards   = {0}", shardCount);
+            Console.WriteLine("      readers  = {0} per shard, {1} total", readersPerShard, TotalPoolSize);
+            Console.WriteLine("      strategy = reads round-robin, writes fan-out to all");
         }
 
         /// <summary>
-        /// Get the shard for a SQL statement using hash-based routing.
-        ///
-        /// Extracts the table name from the SQL and hashes it to a shard index.
-        /// This ensures all operations on the same table go to the same shard:
-        ///   CREATE TABLE foo → shard 2
-        ///   INSERT INTO foo  → shard 2
-        ///   SELECT FROM foo  → shard 2
-        ///
-        /// For queries without a clear table (e.g. SELECT 1+1), falls back
-        /// to hashing the full SQL string.
+        /// Get the next shard for READING (round-robin).
+        /// Each shard has a full copy — any shard can serve any read.
         /// </summary>
-        public Shard ForSql(string sql)
+        public Shard NextForRead()
         {
-            string key = ExtractTableName(sql) ?? sql;
-            int hash = GetStableHash(key);
-            return shards[Math.Abs(hash) % shards.Length];
+            long idx = Interlocked.Increment(ref nextReadShard);
+            return shards[(int)(Math.Abs(idx) % shards.Length)];
+        }
+
+        /// <summary>
+        /// Execute a WRITE on ALL shards (fan-out).
+        /// Every shard gets the same write so data stays consistent.
+        /// Returns the result from the first shard (or first error).
+        /// </summary>
+        public WriteResult WriteToAll(string sql)
+        {
+            if (shards.Length == 1)
+            {
+                // Fast path: single shard, no fan-out overhead
+                return shards[0].Writer.Submit(sql);
+            }
+
+            // Fan-out: submit to all shards in parallel
+            var tasks = new Task<WriteResult>[shards.Length];
+            for (int i = 0; i < shards.Length; i++)
+            {
+                int idx = i; // capture for closure
+                tasks[i] = Task.Run(() => shards[idx].Writer.Submit(sql));
+            }
+
+            Task.WaitAll(tasks);
+
+            // Return first error, or success if all succeeded
+            for (int i = 0; i < tasks.Length; i++)
+            {
+                if (!tasks[i].Result.Ok)
+                    return tasks[i].Result;
+            }
+            return tasks[0].Result;
+        }
+
+        /// <summary>
+        /// Execute a WRITE on ALL shards using pre-built SQL.
+        /// Used by BulkInsert where the SQL is already constructed.
+        /// </summary>
+        public WriteResult WriteToAllRaw(string sql)
+        {
+            return WriteToAll(sql);
         }
 
         /// <summary>
@@ -86,90 +120,6 @@ namespace DuckDbServer
         public Shard GetShard(int index)
         {
             return shards[index % shards.Length];
-        }
-
-        /// <summary>
-        /// Extract the primary table name from a SQL statement.
-        /// Handles: SELECT ... FROM table, INSERT INTO table, CREATE TABLE table,
-        /// DROP TABLE table, UPDATE table, DELETE FROM table
-        /// Returns null if no table name found.
-        /// </summary>
-        private static string ExtractTableName(string sql)
-        {
-            if (string.IsNullOrEmpty(sql)) return null;
-
-            // Normalize: trim, collapse whitespace, uppercase for matching
-            string upper = sql.TrimStart().ToUpperInvariant();
-
-            // Try common patterns
-            string[] afterKeywords = {
-                "FROM ", "INTO ", "TABLE ", "UPDATE ", "JOIN "
-            };
-
-            foreach (var kw in afterKeywords)
-            {
-                int idx = upper.IndexOf(kw, StringComparison.Ordinal);
-                if (idx >= 0)
-                {
-                    int start = idx + kw.Length;
-                    // Skip whitespace after keyword
-                    while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
-                    // Skip optional "IF NOT EXISTS" / "IF EXISTS"
-                    if (upper.Substring(start).StartsWith("IF "))
-                    {
-                        int nextSpace = sql.IndexOf(' ', start + 3);
-                        if (nextSpace > 0)
-                        {
-                            start = nextSpace + 1;
-                            while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
-                            // Skip "EXISTS" or "NOT EXISTS"
-                            if (upper.Substring(start).StartsWith("EXISTS ") ||
-                                upper.Substring(start).StartsWith("NOT "))
-                            {
-                                nextSpace = sql.IndexOf(' ', start);
-                                if (nextSpace > 0)
-                                {
-                                    start = nextSpace + 1;
-                                    while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
-                                    // If "NOT EXISTS", skip "EXISTS" too
-                                    if (upper.Substring(start).StartsWith("EXISTS "))
-                                    {
-                                        nextSpace = sql.IndexOf(' ', start);
-                                        if (nextSpace > 0) start = nextSpace + 1;
-                                        while (start < sql.Length && char.IsWhiteSpace(sql[start])) start++;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Read table name (stops at whitespace, (, ;, or end)
-                    int end = start;
-                    while (end < sql.Length && !char.IsWhiteSpace(sql[end])
-                           && sql[end] != '(' && sql[end] != ';')
-                        end++;
-
-                    if (end > start)
-                        return sql.Substring(start, end - start).ToLowerInvariant();
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Stable hash that doesn't change across .NET versions.
-        /// (String.GetHashCode is not guaranteed stable across runtimes.)
-        /// </summary>
-        private static int GetStableHash(string s)
-        {
-            unchecked
-            {
-                int hash = 5381;
-                foreach (char c in s)
-                    hash = ((hash << 5) + hash) + c;
-                return hash;
-            }
         }
 
         public void Dispose()
@@ -182,17 +132,11 @@ namespace DuckDbServer
             }
         }
 
-        /// <summary>
-        /// Generate shard-specific database path.
-        /// :memory: → :memory: (each shard is independent in-memory DB)
-        /// data.duckdb → data_0.duckdb, data_1.duckdb, etc.
-        /// </summary>
         private static string GetShardPath(string basePath, int shardIndex, int shardCount)
         {
             if (shardCount <= 1) return basePath;
             if (string.IsNullOrEmpty(basePath) || basePath == ":memory:") return ":memory:";
 
-            // data.duckdb → data_0.duckdb
             int dot = basePath.LastIndexOf('.');
             if (dot >= 0)
                 return basePath.Substring(0, dot) + "_" + shardIndex + basePath.Substring(dot);

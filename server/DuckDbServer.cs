@@ -63,8 +63,8 @@ namespace DuckDbServer
 
             try
             {
-                // Hash-based shard selection (same table → same shard)
-                var shard = shardedDb.ForSql(sql);
+                // Read: round-robin across all shards (each has full data copy)
+                var shard = shardedDb.NextForRead();
                 using (var handle = shard.Pool.Borrow())
                 using (var cmd = handle.Connection.CreateCommand())
                 {
@@ -330,8 +330,8 @@ namespace DuckDbServer
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL required" });
             }
-            var shard = shardedDb.ForSql(sql);
-            var result = shard.Writer.Submit(sql);
+            // Write: fan-out to ALL shards (keeps data consistent)
+            var result = shardedDb.WriteToAll(sql);
             if (!result.Ok)
             {
                 Interlocked.Increment(ref errors);
@@ -440,8 +440,8 @@ namespace DuckDbServer
                     sb.Append(")");
                 }
 
-                var shard = shardedDb.ForSql("INSERT INTO " + table);
-                var result = shard.Writer.Submit(sb.ToString());
+                // Write: fan-out to ALL shards
+                var result = shardedDb.WriteToAll(sb.ToString());
                 if (!result.Ok)
                 {
                     Interlocked.Increment(ref errors);
