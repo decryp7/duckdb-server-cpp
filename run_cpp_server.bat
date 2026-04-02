@@ -28,7 +28,7 @@ echo  DuckDB gRPC Server (C++) — High Performance Mode
 echo  ==================================================
 echo.
 
-cpp\bin\Debug\DuckFlightServerCpp.exe ^
+cpp\bin\Debug\DuckDbServerCpp.exe ^
     --port 17777 ^
     --readers 64 ^
     --batch-ms 50 ^

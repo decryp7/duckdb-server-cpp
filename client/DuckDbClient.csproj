@@ -6,8 +6,8 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <OutputType>Exe</OutputType>
-    <RootNamespace>DuckArrowClient</RootNamespace>
-    <AssemblyName>DuckArrowClient</AssemblyName>
+    <RootNamespace>DuckDbClient</RootNamespace>
+    <AssemblyName>DuckDbClient</AssemblyName>
     <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
     <LangVersion>7.3</LangVersion>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
@@ -61,8 +61,8 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="DasException.cs" />
-    <Compile Include="DasFlightClient.cs" />
+    <Compile Include="DuckDbException.cs" />
+    <Compile Include="DuckDbClient.cs" />
     <Compile Include="Example.cs" />
     <Compile Include="Interfaces.cs" />
   </ItemGroup>

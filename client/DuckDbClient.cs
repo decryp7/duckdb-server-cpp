@@ -6,13 +6,13 @@ using System.Threading.Tasks;
 using DuckDbProto;
 using Grpc.Core;
 
-namespace DuckArrowClient
+namespace DuckDbClient
 {
     /// <summary>
     /// Thread-safe gRPC client for the DuckDB server.
     /// Reads columnar data — packed arrays instead of per-cell objects.
     /// </summary>
-    public sealed class DasFlightClient : IDasFlightClient
+    public sealed class DuckDbClient : IDuckDbClient
     {
         private readonly Channel channel;
         private readonly DuckDbService.DuckDbServiceClient grpcClient;
@@ -30,24 +30,24 @@ namespace DuckArrowClient
             new ChannelOption("grpc.http2.max_pings_without_data", 0),
         };
 
-        public DasFlightClient(string host = "localhost", int port = 17777)
+        public DuckDbClient(string host = "localhost", int port = 17777)
             : this(new Channel(host + ":" + port, ChannelCredentials.Insecure, HighPerfOptions)) { }
 
-        public DasFlightClient(string host, int port, ChannelCredentials credentials)
+        public DuckDbClient(string host, int port, ChannelCredentials credentials)
             : this(new Channel(host + ":" + port, credentials, HighPerfOptions)) { }
 
-        private DasFlightClient(Channel channel)
+        private DuckDbClient(Channel channel)
         {
             this.channel = channel;
             this.grpcClient = new DuckDbService.DuckDbServiceClient(channel);
         }
 
-        public IFlightQueryResult Query(string sql, CancellationToken ct = default)
+        public IQueryResult Query(string sql, CancellationToken ct = default)
         {
             return Task.Run(() => QueryAsync(sql, ct)).GetAwaiter().GetResult();
         }
 
-        public async Task<IFlightQueryResult> QueryAsync(string sql, CancellationToken ct = default)
+        public async Task<IQueryResult> QueryAsync(string sql, CancellationToken ct = default)
         {
             EnsureNotDisposed();
             try
@@ -71,7 +71,7 @@ namespace DuckArrowClient
             }
             catch (RpcException ex)
             {
-                throw new DasException("Query failed: " + ex.Status.Detail, ex);
+                throw new DuckDbException("Query failed: " + ex.Status.Detail, ex);
             }
         }
 
@@ -87,9 +87,9 @@ namespace DuckArrowClient
             {
                 var r = await grpcClient.ExecuteAsync(new ExecuteRequest { Sql = sql }, cancellationToken: ct)
                     .ResponseAsync.ConfigureAwait(false);
-                if (!r.Success) throw new DasException("Execute failed: " + r.Error);
+                if (!r.Success) throw new DuckDbException("Execute failed: " + r.Error);
             }
-            catch (RpcException ex) { throw new DasException("Execute failed: " + ex.Status.Detail, ex); }
+            catch (RpcException ex) { throw new DuckDbException("Execute failed: " + ex.Status.Detail, ex); }
         }
 
         public void Ping()
@@ -98,9 +98,9 @@ namespace DuckArrowClient
             try
             {
                 var r = Task.Run(async () => await grpcClient.PingAsync(new PingRequest()).ResponseAsync.ConfigureAwait(false)).GetAwaiter().GetResult();
-                if (r.Message != "pong") throw new DasException("Ping: unexpected '" + r.Message + "'");
+                if (r.Message != "pong") throw new DuckDbException("Ping: unexpected '" + r.Message + "'");
             }
-            catch (RpcException ex) { throw new DasException("Ping failed: " + ex.Status.Detail, ex); }
+            catch (RpcException ex) { throw new DuckDbException("Ping failed: " + ex.Status.Detail, ex); }
         }
 
         public string GetStats()
@@ -112,12 +112,12 @@ namespace DuckArrowClient
                 return string.Format("{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2},\"reader_pool_size\":{3},\"port\":{4}}}",
                     r.QueriesRead, r.QueriesWrite, r.Errors, r.ReaderPoolSize, r.Port);
             }
-            catch (RpcException ex) { throw new DasException("GetStats failed: " + ex.Status.Detail, ex); }
+            catch (RpcException ex) { throw new DuckDbException("GetStats failed: " + ex.Status.Detail, ex); }
         }
 
         private void EnsureNotDisposed()
         {
-            if (Thread.VolatileRead(ref disposed) != 0) throw new ObjectDisposedException(nameof(DasFlightClient));
+            if (Thread.VolatileRead(ref disposed) != 0) throw new ObjectDisposedException(nameof(DuckDbClient));
         }
 
         public void Dispose()
@@ -143,7 +143,7 @@ namespace DuckArrowClient
 
     // ── Columnar query result ────────────────────────────────────────────────
 
-    public sealed class ColumnarQueryResult : IFlightQueryResult
+    public sealed class ColumnarQueryResult : IQueryResult
     {
         private readonly List<ColumnMeta> columns;
         private readonly List<ColumnarBatch> batches;

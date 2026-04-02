@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using DuckDB.NET.Data;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// Batches concurrent write requests into single DuckDB transactions.

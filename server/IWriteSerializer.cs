@@ -1,6 +1,6 @@
 using System;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// Serialises concurrent write operations into batched transactions.

@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using DuckArrowClient;
+using DuckDbClient;
 
-namespace DuckArrowBenchmark
+namespace DuckDbBenchmark
 {
     /// <summary>
-    /// Runs benchmark scenarios against a DuckDB Arrow Flight server.
+    /// Runs benchmark scenarios against a DuckDB gRPC server.
     /// Measures throughput, latency, and maximum concurrency.
     /// </summary>
     public sealed class BenchmarkRunner
@@ -39,7 +39,7 @@ namespace DuckArrowBenchmark
             Console.WriteLine("  Starting: {0} concurrent readers, {1} ops each, {2} rows per query...",
                 concurrency, opsPerClient, rowCount);
 
-            using (var client = new DasFlightClient(host, port))
+            using (var client = new DuckDbClient(host, port))
             {
                 RunWarmup(client, sql);
 
@@ -62,7 +62,7 @@ namespace DuckArrowBenchmark
         }
 
         private static void ReaderWorker(
-            IDasFlightClient client, string sql, int ops, LatencyTracker tracker)
+            IDuckDbClient client, string sql, int ops, LatencyTracker tracker)
         {
             for (int i = 0; i < ops; i++)
             {
@@ -98,7 +98,7 @@ namespace DuckArrowBenchmark
             Console.WriteLine("  Starting: {0} concurrent writers, {1} INSERTs each ({2} total)...",
                 concurrency, opsPerClient, concurrency * opsPerClient);
 
-            using (var client = new DasFlightClient(host, port))
+            using (var client = new DuckDbClient(host, port))
             {
                 client.Execute("DROP TABLE IF EXISTS bench_write");
                 client.Execute("CREATE TABLE bench_write (id INTEGER, value DOUBLE, label TEXT)");
@@ -131,7 +131,7 @@ namespace DuckArrowBenchmark
         }
 
         private static void WriterWorker(
-            IDasFlightClient client, int clientId, int ops, LatencyTracker tracker)
+            IDuckDbClient client, int clientId, int ops, LatencyTracker tracker)
         {
             for (int i = 0; i < ops; i++)
             {
@@ -174,7 +174,7 @@ namespace DuckArrowBenchmark
             Console.WriteLine("  Starting: {0} readers + {1} writers, {2} ops each...",
                 readers, writers, opsPerClient);
 
-            using (var client = new DasFlightClient(host, port))
+            using (var client = new DuckDbClient(host, port))
             {
                 client.Execute("DROP TABLE IF EXISTS bench_mixed");
                 client.Execute("CREATE TABLE bench_mixed (id INTEGER, data TEXT)");
@@ -206,7 +206,7 @@ namespace DuckArrowBenchmark
         }
 
         private static void MixedWriterWorker(
-            IDasFlightClient client, int clientId, int ops, LatencyTracker tracker)
+            IDuckDbClient client, int clientId, int ops, LatencyTracker tracker)
         {
             for (int i = 0; i < ops; i++)
             {
@@ -249,7 +249,7 @@ namespace DuckArrowBenchmark
             Console.WriteLine("  Starting: streaming {0:N0} rows ({1:F0} MB est.) x {2} iterations...",
                 rowCount, estimatedMb, iterations);
 
-            using (var client = new DasFlightClient(host, port))
+            using (var client = new DuckDbClient(host, port))
             {
                 RunWarmup(client, "SELECT 1");
 
@@ -359,7 +359,7 @@ namespace DuckArrowBenchmark
             Console.WriteLine("  Starting: {0} threads x {1}s sustained {2}...",
                 concurrency, durationSeconds, kind.ToLower());
 
-            using (var client = new DasFlightClient(host, port))
+            using (var client = new DuckDbClient(host, port))
             {
                 if (!isReader)
                 {
@@ -395,7 +395,7 @@ namespace DuckArrowBenchmark
         }
 
         private static void SustainedReaderWorker(
-            IDasFlightClient client, string sql, LatencyTracker tracker, CancellationToken ct)
+            IDuckDbClient client, string sql, LatencyTracker tracker, CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
             {
@@ -419,7 +419,7 @@ namespace DuckArrowBenchmark
         }
 
         private static void SustainedWriterWorker(
-            IDasFlightClient client, int clientId, LatencyTracker tracker, CancellationToken ct)
+            IDuckDbClient client, int clientId, LatencyTracker tracker, CancellationToken ct)
         {
             int i = 0;
             while (!ct.IsCancellationRequested)
@@ -447,7 +447,7 @@ namespace DuckArrowBenchmark
 
         // ── Helpers ──────────────────────────────────────────────────────────
 
-        private void RunWarmup(IDasFlightClient client, string sql)
+        private void RunWarmup(IDuckDbClient client, string sql)
         {
             for (int i = 0; i < warmupOps; i++)
             {

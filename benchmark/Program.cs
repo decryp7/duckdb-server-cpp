@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using DuckArrowClient;
+using DuckDbClient;
 
-namespace DuckArrowBenchmark
+namespace DuckDbBenchmark
 {
     internal static class Program
     {
@@ -36,13 +36,13 @@ namespace DuckArrowBenchmark
             }
 
             Console.WriteLine("==========================================================================");
-            Console.WriteLine("  DuckDB Arrow Flight Server — Performance Benchmark");
+            Console.WriteLine("  DuckDB gRPC Server — Performance Benchmark");
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
             Console.WriteLine("  Target server  : {0}:{1}", host, port);
             Console.WriteLine("  Mode           : {0}", full ? "FULL (all tests + max concurrency + sustained)" : quick ? "QUICK (smoke test)" : "STANDARD");
-            Console.WriteLine("  Protocol       : Arrow Flight over gRPC / HTTP/2");
-            Console.WriteLine("  Client         : single shared DasFlightClient (HTTP/2 multiplexing)");
+            Console.WriteLine("  Protocol       : gRPC over gRPC / HTTP/2");
+            Console.WriteLine("  Client         : single shared DuckDbClient (HTTP/2 multiplexing)");
             Console.WriteLine();
             Console.WriteLine("  What is measured:");
             Console.WriteLine("    - Throughput: operations per second (higher = better)");
@@ -305,7 +305,7 @@ namespace DuckArrowBenchmark
             Console.Write("  Connecting to {0}:{1}... ", host, port);
             try
             {
-                using (var client = new DasFlightClient(host, port))
+                using (var client = new DuckDbClient(host, port))
                 {
                     client.Ping();
                     string stats = client.GetStats();
@@ -323,7 +323,7 @@ namespace DuckArrowBenchmark
                 Console.Error.WriteLine("  Error: " + ex.Message);
                 Console.Error.WriteLine();
                 Console.Error.WriteLine("  Make sure the server is running:");
-                Console.Error.WriteLine("    DuckArrowServer.exe --port " + port);
+                Console.Error.WriteLine("    DuckDbServer.exe --port " + port);
                 return false;
             }
         }
@@ -336,9 +336,9 @@ namespace DuckArrowBenchmark
 
         private static void PrintUsage()
         {
-            Console.WriteLine("DuckDB Arrow Flight Server — Performance Benchmark");
+            Console.WriteLine("DuckDB gRPC Server — Performance Benchmark");
             Console.WriteLine();
-            Console.WriteLine("Usage: DuckArrowBenchmark.exe [options]");
+            Console.WriteLine("Usage: DuckDbBenchmark.exe [options]");
             Console.WriteLine();
             Console.WriteLine("  --host <addr>   Server address (default: localhost)");
             Console.WriteLine("  --port <n>      Server port (default: 17777)");

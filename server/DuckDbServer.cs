@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using DuckDbProto;
 using Grpc.Core;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// DuckDB gRPC server — columnar encoding for extreme performance.
@@ -14,7 +14,7 @@ namespace DuckArrowServer
     /// 1000 rows × 10 columns = 10 ColumnData objects instead of 11,000 TypedValue objects.
     /// Packed repeated fields use minimal protobuf overhead.
     /// </summary>
-    public sealed class DuckFlightServer : DuckDbService.DuckDbServiceBase, IDisposable
+    public sealed class DuckDbServer : DuckDbService.DuckDbServiceBase, IDisposable
     {
         private readonly ServerConfig config;
         private readonly IConnectionPool readPool;
@@ -26,7 +26,7 @@ namespace DuckArrowServer
 
         private readonly int batchSize;
 
-        public DuckFlightServer(ServerConfig config, IConnectionPool readPool, IWriteSerializer writer)
+        public DuckDbServer(ServerConfig config, IConnectionPool readPool, IWriteSerializer writer)
         {
             this.config = config;
             this.readPool = readPool;

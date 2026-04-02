@@ -5,18 +5,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using Grpc.Core;
 
-namespace DuckArrowClient
+namespace DuckDbClient
 {
     internal static class Example
     {
         // ── 1. Basic query ───────────────────────────────────────────────────
         public static void BasicQuery()
         {
-            using (IDasFlightClient client = new DasFlightClient("localhost", 17777))
+            using (IDuckDbClient client = new DuckDbClient("localhost", 17777))
             {
                 client.Ping();
 
-                using (IFlightQueryResult result = client.Query(
+                using (IQueryResult result = client.Query(
                     "SELECT 42 AS answer, 'hello' AS greeting"))
                 {
                     Console.WriteLine("Total rows: " + result.RowCount);
@@ -30,9 +30,9 @@ namespace DuckArrowClient
         // ── 2. DataTable binding ─────────────────────────────────────────────
         public static void DataTableBinding()
         {
-            using (IDasFlightClient client = new DasFlightClient())
+            using (IDuckDbClient client = new DuckDbClient())
             {
-                using (IFlightQueryResult result = client.Query(
+                using (IQueryResult result = client.Query(
                     "SELECT range AS id, 'row_' || range AS label, random() AS score " +
                     "FROM range(0, 1000)"))
                 {
@@ -45,13 +45,13 @@ namespace DuckArrowClient
         // ── 3. Write operations ──────────────────────────────────────────────
         public static void WriteOperations()
         {
-            using (IDasFlightClient client = new DasFlightClient())
+            using (IDuckDbClient client = new DuckDbClient())
             {
                 client.Execute("CREATE TABLE IF NOT EXISTS events (id INT, name TEXT)");
                 client.Execute("INSERT INTO events VALUES (1, 'login')");
                 client.Execute("INSERT INTO events VALUES (2, 'purchase')");
 
-                using (IFlightQueryResult result = client.Query(
+                using (IQueryResult result = client.Query(
                     "SELECT * FROM events ORDER BY id"))
                 {
                     foreach (var row in result.ToRows())
@@ -63,7 +63,7 @@ namespace DuckArrowClient
         // ── 4. Stats ─────────────────────────────────────────────────────────
         public static void PrintStats()
         {
-            using (IDasFlightClient client = new DasFlightClient())
+            using (IDuckDbClient client = new DuckDbClient())
             {
                 string json = client.GetStats();
                 Console.WriteLine("Server stats: " + json);
@@ -73,16 +73,16 @@ namespace DuckArrowClient
         // ── 5. Concurrent queries ────────────────────────────────────────────
         public static async Task ConcurrentQueriesAsync()
         {
-            using (IDasFlightClient client = new DasFlightClient())
+            using (IDuckDbClient client = new DuckDbClient())
             {
-                var tasks = new List<Task<IFlightQueryResult>>();
+                var tasks = new List<Task<IQueryResult>>();
                 for (int i = 0; i < 20; i++)
                 {
                     string sql = string.Format("SELECT {0} * {0} AS sq", i);
                     tasks.Add(client.QueryAsync(sql));
                 }
 
-                IFlightQueryResult[] results = null;
+                IQueryResult[] results = null;
                 try
                 {
                     results = await Task.WhenAll(tasks);
@@ -105,7 +105,7 @@ namespace DuckArrowClient
         // ── 6. DI pattern ────────────────────────────────────────────────────
         public static void DependencyInjectionPattern()
         {
-            using (IDasFlightClient client = new DasFlightClient("localhost", 17777))
+            using (IDuckDbClient client = new DuckDbClient("localhost", 17777))
             {
                 var service = new SalesReportService(client);
                 DataTable report = service.GetTopProducts(10);
@@ -145,8 +145,8 @@ namespace DuckArrowClient
 
     internal sealed class SalesReportService
     {
-        private readonly IDasFlightClient db;
-        public SalesReportService(IDasFlightClient db) { this.db = db; }
+        private readonly IDuckDbClient db;
+        public SalesReportService(IDuckDbClient db) { this.db = db; }
 
         public DataTable GetTopProducts(int n)
         {
@@ -154,7 +154,7 @@ namespace DuckArrowClient
                 "SELECT 'product_' || range AS product, random() * 1000 AS revenue " +
                 "FROM range(0, {0}) ORDER BY revenue DESC", n);
 
-            using (IFlightQueryResult result = db.Query(sql))
+            using (IQueryResult result = db.Query(sql))
                 return result.ToDataTable("TopProducts");
         }
     }

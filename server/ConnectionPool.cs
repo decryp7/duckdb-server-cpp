@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Threading;
 using DuckDB.NET.Data;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// High-performance thread-safe connection pool for DuckDB read queries.

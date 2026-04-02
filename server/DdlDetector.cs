@@ -1,6 +1,6 @@
 using System;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// Detects whether a SQL statement is DDL (CREATE, DROP, ALTER, etc.)

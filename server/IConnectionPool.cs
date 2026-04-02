@@ -1,6 +1,6 @@
 using System;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// A thread-safe pool of database connections.

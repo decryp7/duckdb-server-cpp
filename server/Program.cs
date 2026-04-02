@@ -2,15 +2,15 @@ using System;
 using System.IO;
 using Grpc.Core;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
-    /// Entry point for the DuckDB Arrow Flight Server (C# edition).
+    /// Entry point for the DuckDB gRPC Server (C# edition).
     /// Parses command-line arguments, sets up signal handling, and starts the server.
     /// </summary>
     internal static class Program
     {
-        private const string Version = "4.1.9";
+        private const string Version = "5.0.0";
         private static volatile Server grpcServer;
 
         static int Main(string[] args)
@@ -53,7 +53,7 @@ namespace DuckArrowServer
             // Create the database manager first. All connections share this DB.
             // Without this, each DuckDBConnection(":memory:") creates a separate DB.
             DatabaseManager dbManager = null;
-            DuckFlightServer flightServer = null;
+            DuckDbServer duckDbServer = null;
 
             try
             {
@@ -61,7 +61,7 @@ namespace DuckArrowServer
 
                 var readPool = new ConnectionPool(dbManager, config.ReaderPoolSize);
                 var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
-                flightServer = new DuckFlightServer(config, readPool, writer);
+                duckDbServer = new DuckDbServer(config, readPool, writer);
 
                 var credentials = BuildCredentials(config);
 
@@ -80,7 +80,7 @@ namespace DuckArrowServer
 
                 grpcServer = new Server(channelOptions)
                 {
-                    Services = { flightServer.BuildGrpcService() },
+                    Services = { duckDbServer.BuildGrpcService() },
                     Ports = { new ServerPort(config.Host, config.Port, credentials) }
                 };
 
@@ -94,7 +94,7 @@ namespace DuckArrowServer
             finally
             {
                 // Dispose in reverse order. Handles partial construction.
-                flightServer?.Dispose();
+                duckDbServer?.Dispose();
                 dbManager?.Dispose();
             }
 
@@ -145,7 +145,7 @@ namespace DuckArrowServer
 
         private static void PrintStartupBanner(ServerConfig config)
         {
-            Console.WriteLine("[das] Arrow Flight server v" + Version + " (C#)");
+            Console.WriteLine("[das] gRPC server v" + Version + " (C#)");
             Console.WriteLine("      address    = " + config.Host + ":" + config.Port);
             Console.WriteLine("      readers    = " + config.ReaderPoolSize);
             Console.WriteLine("      batch-size = " + config.BatchSize + " rows");
@@ -240,9 +240,9 @@ namespace DuckArrowServer
         private static void PrintUsage()
         {
             int cpuCount = Environment.ProcessorCount;
-            Console.WriteLine("DuckDB Arrow Flight Server v" + Version + " (C#)");
+            Console.WriteLine("DuckDB gRPC Server v" + Version + " (C#)");
             Console.WriteLine();
-            Console.WriteLine("Usage: DuckArrowServer.exe [options]");
+            Console.WriteLine("Usage: DuckDbServer.exe [options]");
             Console.WriteLine();
             Console.WriteLine("Database:");
             Console.WriteLine("  --db       <path>   DuckDB file or :memory:  (default: :memory:)");

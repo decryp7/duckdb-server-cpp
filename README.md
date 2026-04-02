@@ -9,7 +9,7 @@ Built for Visual Studio 2017. No Apache Arrow dependency.
 │  Clients (any language with gRPC + protobuf)                        │
 │                                                                     │
 │  C# (.NET 4.6.2)    C++ (protoc)    Python / Java / Go / Rust      │
-│  DasFlightClient     generated       generated from .proto          │
+│  DuckDbClient     generated       generated from .proto          │
 │                                                                     │
 │    Query(sql)        ──────────► stream of rows (protobuf)          │
 │    Execute(sql)      ──────────► success / error                    │
@@ -50,9 +50,9 @@ git clone https://github.com/decryp7/duckdb-server-cpp.git
 cd duckdb-server-cpp
 
 # Restore NuGet packages
-nuget restore DuckArrowFlight.sln
+nuget restore DuckDbServer.sln
 
-# Open DuckArrowFlight.sln in VS2017 → Build Solution
+# Open DuckDbServer.sln in VS2017 → Build Solution
 ```
 
 ### 2. Run the server
@@ -98,11 +98,11 @@ protoc --go_out=. --grpc_out=. --plugin=protoc-gen-grpc=grpc_go_plugin proto/duc
 ## Client usage (.NET 4.6.2)
 
 ```csharp
-using DuckArrowClient;
+using DuckDbClient;
 using System.Data;
 
 // One client handles all concurrent callers (HTTP/2 multiplexing)
-using (var client = new DasFlightClient("server", 17777))
+using (var client = new DuckDbClient("server", 17777))
 {
     // Read query → rows
     using (var result = client.Query("SELECT * FROM sales"))
@@ -123,7 +123,7 @@ using (var client = new DasFlightClient("server", 17777))
 
 // TLS
 var creds = new Grpc.Core.SslCredentials(File.ReadAllText("ca.crt"));
-using (var client = new DasFlightClient("server", 17777, creds))
+using (var client = new DuckDbClient("server", 17777, creds))
     client.Ping();
 ```
 
@@ -133,7 +133,7 @@ using (var client = new DasFlightClient("server", 17777, creds))
 
 ```
 .
-├── DuckArrowFlight.sln              VS2017 solution (all projects)
+├── DuckDbServer.sln              VS2017 solution (all projects)
 ├── nuget.config                     Shared NuGet packages directory
 ├── generate_proto.bat               Regenerate C# code from .proto
 ├── run_server.bat                   Launch server (high performance)
@@ -151,9 +151,9 @@ using (var client = new DasFlightClient("server", 17777, creds))
 │       └── DuckdbServiceGrpc.cs     gRPC server base + client stubs
 │
 ├── server/                          C# server (.NET 4.6.2, x64)
-│   ├── DuckArrowServer.csproj
+│   ├── DuckDbServer.csproj
 │   ├── Program.cs                   CLI, signal handling, gRPC startup
-│   ├── DuckFlightServer.cs          Query / Execute / Ping / GetStats
+│   ├── DuckDbServer.cs          Query / Execute / Ping / GetStats
 │   ├── DatabaseManager.cs           Shared DB connections + PRAGMA tuning
 │   ├── IConnectionPool.cs           Connection pool interface
 │   ├── ConnectionPool.cs            ConcurrentBag + SemaphoreSlim pool
@@ -165,20 +165,20 @@ using (var client = new DasFlightClient("server", 17777, creds))
 │   └── ServerConfig.cs              Config, stats, WriteResult
 │
 ├── client/                          C# client (.NET 4.6.2, x86)
-│   ├── DuckArrowClient.csproj
-│   ├── DasFlightClient.cs           gRPC client (Query/Execute/Ping/Stats)
-│   ├── Interfaces.cs                IDasFlightClient, IFlightQueryResult
-│   ├── DasException.cs              Typed exception
+│   ├── DuckDbClient.csproj
+│   ├── DuckDbClient.cs           gRPC client (Query/Execute/Ping/Stats)
+│   ├── Interfaces.cs                IDuckDbClient, IQueryResult
+│   ├── DuckDbException.cs              Typed exception
 │   └── Example.cs                   6 usage examples
 │
 ├── benchmark/                       Performance benchmark (.NET 4.6.2, x86)
-│   ├── DuckArrowBenchmark.csproj
+│   ├── DuckDbBenchmark.csproj
 │   ├── Program.cs                   --quick / standard / --full modes
 │   ├── BenchmarkRunner.cs           6 scenario types
 │   └── BenchmarkResult.cs           Latency tracking + reporting
 │
 ├── cpp/                             C++ server (VS2017, x64, vcpkg)
-│   └── DuckFlightServerCpp.vcxproj  Pre-build protoc + gRPC server
+│   └── DuckDbServerCpp.vcxproj  Pre-build protoc + gRPC server
 │
 ├── include/                         C++ headers
 │   ├── grpc_server.hpp              DuckGrpcServer class
@@ -239,7 +239,7 @@ using (var client = new DasFlightClient("server", 17777, creds))
 
 ```csharp
 // ONE client per app — HTTP/2 multiplexes all concurrent RPCs
-using (var client = new DasFlightClient("server", 17777))
+using (var client = new DuckDbClient("server", 17777))
 {
     // Use async for concurrent queries
     var tasks = queries.Select(sql => client.QueryAsync(sql));
@@ -269,7 +269,7 @@ No Apache Arrow dependency.
 | Version | Summary |
 |---|---|
 | **v5.0.0** | Custom gRPC protocol, removed Arrow dependency, pure protobuf data transfer, C++ and C# servers from same .proto |
-| v4.0.0–v4.1.9 | Arrow Flight rewrite, .NET client, 48 bugs fixed across 15 review rounds |
+| v4.0.0–v4.1.9 | gRPC rewrite, .NET client, 48 bugs fixed across 15 review rounds |
 | v3.1.x | IOCP server, VS 2017 fixes, streaming, stats, auto-reconnect |
 | v3.0.0 | Windows IOCP edition |
 | v2.0.0 | Thread pool + connection pool scaling |

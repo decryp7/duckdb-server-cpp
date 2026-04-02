@@ -1,10 +1,10 @@
 using System;
 using System.Runtime.Serialization;
 
-namespace DuckArrowClient
+namespace DuckDbClient
 {
     /// <summary>
-    /// Exception thrown by <see cref="DasFlightClient"/> when the server returns
+    /// Exception thrown by <see cref="DuckDbClient"/> when the server returns
     /// an error, the gRPC call fails, or a protocol violation is detected.
     ///
     /// <para>
@@ -15,10 +15,10 @@ namespace DuckArrowClient
     ///
     /// <para><b>Retrying</b></para>
     /// <para>
-    /// A <see cref="DasException"/> from a write operation indicates the
+    /// A <see cref="DuckDbException"/> from a write operation indicates the
     /// statement failed on the server — retrying the same SQL is unlikely to
     /// succeed without fixing the underlying data problem.  A
-    /// <see cref="DasException"/> from a read operation caused by a transient
+    /// <see cref="DuckDbException"/> from a read operation caused by a transient
     /// network fault (gRPC <c>UNAVAILABLE</c>) may be retried after a delay.
     /// </para>
     ///
@@ -31,20 +31,20 @@ namespace DuckArrowClient
     /// </para>
     /// </summary>
     [Serializable]
-    public sealed class DasException : Exception
+    public sealed class DuckDbException : Exception
     {
         /// <summary>Construct with a message only.</summary>
-        public DasException(string message) : base(message) { }
+        public DuckDbException(string message) : base(message) { }
 
         /// <summary>Construct with a message and an inner exception.</summary>
-        public DasException(string message, Exception inner) : base(message, inner) { }
+        public DuckDbException(string message, Exception inner) : base(message, inner) { }
 
         /// <summary>
         /// Deserialization constructor required by <see cref="ISerializable"/>.
         /// Called by the .NET runtime when deserializing an exception that has
         /// been serialized across an AppDomain boundary.
         /// </summary>
-        private DasException(SerializationInfo info, StreamingContext context)
+        private DuckDbException(SerializationInfo info, StreamingContext context)
             : base(info, context) { }
     }
 }

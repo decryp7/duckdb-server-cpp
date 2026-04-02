@@ -1,7 +1,7 @@
 using System;
 using DuckDB.NET.Data;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// Manages the DuckDB database lifecycle and creates connections.

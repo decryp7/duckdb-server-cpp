@@ -14,7 +14,7 @@ REM    2. DataTable       — ADO.NET DataTable binding (1000 rows)
 REM    3. Writes          — CREATE TABLE + INSERT + SELECT
 REM    4. Stats           — Server metrics (queries, errors, pool size)
 REM    5. Concurrent      — 20 parallel async queries
-REM    6. DI pattern      — Dependency injection with IDasFlightClient
+REM    6. DI pattern      — Dependency injection with IDuckDbClient
 REM
 REM  Usage:
 REM    run_client.bat
@@ -25,4 +25,4 @@ echo  DuckDB gRPC Client Examples
 echo  ============================
 echo.
 
-client\bin\Debug\DuckArrowClient.exe %*
+client\bin\Debug\DuckDbClient.exe %*

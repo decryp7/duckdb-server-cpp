@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace DuckArrowBenchmark
+namespace DuckDbBenchmark
 {
     /// <summary>
     /// Results from a single benchmark scenario.

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// Merges multiple single-row INSERT statements targeting the same table

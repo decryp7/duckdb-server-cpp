@@ -4,12 +4,12 @@ using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace DuckArrowClient
+namespace DuckDbClient
 {
     /// <summary>
     /// The result of a read query. Contains column metadata and row data.
     /// </summary>
-    public interface IFlightQueryResult : IDisposable
+    public interface IQueryResult : IDisposable
     {
         /// <summary>Total number of rows.</summary>
         int RowCount { get; }
@@ -39,10 +39,10 @@ namespace DuckArrowClient
     /// A client connection to a DuckDB gRPC server.
     /// Thread-safe — one instance per application.
     /// </summary>
-    public interface IDasFlightClient : IDisposable
+    public interface IDuckDbClient : IDisposable
     {
-        IFlightQueryResult Query(string sql, CancellationToken ct = default);
-        Task<IFlightQueryResult> QueryAsync(string sql, CancellationToken ct = default);
+        IQueryResult Query(string sql, CancellationToken ct = default);
+        Task<IQueryResult> QueryAsync(string sql, CancellationToken ct = default);
 
         void Execute(string sql, CancellationToken ct = default);
         Task ExecuteAsync(string sql, CancellationToken ct = default);
@@ -56,13 +56,13 @@ namespace DuckArrowClient
     /// </summary>
     public interface IPoolLease : IDisposable
     {
-        IDasFlightClient Client { get; }
+        IDuckDbClient Client { get; }
     }
 
     /// <summary>
     /// Optional pool of client instances.
     /// </summary>
-    public interface IDasFlightPool : IDisposable
+    public interface IDuckDbPool : IDisposable
     {
         IPoolLease Borrow(CancellationToken ct = default);
         Task<IPoolLease> BorrowAsync(CancellationToken ct = default);

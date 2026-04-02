@@ -1,6 +1,6 @@
 using System;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
     /// Parses simple INSERT statements to extract the table name and values clause.

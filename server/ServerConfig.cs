@@ -1,9 +1,9 @@
 using System;
 
-namespace DuckArrowServer
+namespace DuckDbServer
 {
     /// <summary>
-    /// Configuration for the DuckDB Arrow Flight server.
+    /// Configuration for the DuckDB gRPC server.
     /// All fields have sensible defaults that auto-scale to the host machine.
     /// </summary>
     public sealed class ServerConfig

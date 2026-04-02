@@ -4,14 +4,14 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{C3D4E5F6-A7B8-9012-CDEF-123456789ABC}</ProjectGuid>
+    <ProjectGuid>{B2C3D4E5-F6A7-8901-BCDE-F12345678901}</ProjectGuid>
     <OutputType>Exe</OutputType>
-    <RootNamespace>DuckArrowBenchmark</RootNamespace>
-    <AssemblyName>DuckArrowBenchmark</AssemblyName>
+    <RootNamespace>DuckDbServer</RootNamespace>
+    <AssemblyName>DuckDbServer</AssemblyName>
     <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
     <LangVersion>7.3</LangVersion>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <PlatformTarget>x86</PlatformTarget>
+    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -34,6 +34,7 @@
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
     <Reference Include="Grpc.Core">
       <HintPath>..\packages\Grpc.Core.2.46.6\lib\net45\Grpc.Core.dll</HintPath>
     </Reference>
@@ -43,11 +44,17 @@
     <Reference Include="Google.Protobuf">
       <HintPath>..\packages\Google.Protobuf.3.24.4\lib\net45\Google.Protobuf.dll</HintPath>
     </Reference>
+    <Reference Include="DuckDB.NET.Data">
+      <HintPath>..\packages\DuckDB.NET.Data.Full.1.1.1\lib\netstandard2.0\DuckDB.NET.Data.dll</HintPath>
+    </Reference>
     <Reference Include="System.Buffers">
       <HintPath>..\packages\System.Buffers.4.5.1\lib\netstandard2.0\System.Buffers.dll</HintPath>
     </Reference>
     <Reference Include="System.Memory">
       <HintPath>..\packages\System.Memory.4.5.5\lib\netstandard2.0\System.Memory.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Numerics.Vectors">
+      <HintPath>..\packages\System.Numerics.Vectors.4.5.0\lib\net46\System.Numerics.Vectors.dll</HintPath>
     </Reference>
     <Reference Include="System.Runtime.CompilerServices.Unsafe">
       <HintPath>..\packages\System.Runtime.CompilerServices.Unsafe.6.0.0\lib\netstandard2.0\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
@@ -61,23 +68,34 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
-    <Compile Include="BenchmarkRunner.cs" />
-    <Compile Include="BenchmarkResult.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\client\DuckArrowClient.csproj">
-      <Project>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</Project>
-      <Name>DuckArrowClient</Name>
-    </ProjectReference>
+    <Compile Include="DuckDbServer.cs" />
+    <Compile Include="DatabaseManager.cs" />
+    <Compile Include="IConnectionPool.cs" />
+    <Compile Include="ConnectionPool.cs" />
+    <Compile Include="IWriteSerializer.cs" />
+    <Compile Include="WriteSerializer.cs" />
+    <Compile Include="DdlDetector.cs" />
+    <Compile Include="InsertParser.cs" />
+    <Compile Include="InsertBatcher.cs" />
+    <Compile Include="ServerConfig.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\shared\DuckDbShared.csproj">
+      <Project>{E5F6A7B8-C9D0-1234-EFAB-CDEF01234567}</Project>
+      <Name>DuckDbShared</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="CopyNativeDlls" AfterTargets="Build">
-    <Copy SourceFiles="..\packages\Grpc.Core.2.46.6\runtimes\win-x86\native\grpc_csharp_ext.x86.dll"
-          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="..\packages\Grpc.Core.2.46.6\runtimes\win-x64\native\grpc_csharp_ext.x64.dll"
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\DuckDB.NET.Bindings.Full.1.1.1\runtimes\win-x64\native\duckdb.dll"
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\DuckDB.NET.Bindings.Full.1.1.1\lib\netstandard2.0\DuckDB.NET.Bindings.dll"
           DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

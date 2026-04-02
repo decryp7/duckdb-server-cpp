@@ -2,8 +2,8 @@
  * @file main_grpc.cpp
  * @brief Entry point for the DuckDB gRPC Server (custom protocol).
  *
- * Uses proto/duckdb_service.proto instead of Arrow Flight.
- * Compatible with the C# client (DasFlightClient) and any client
+ * Uses proto/duckdb_service.proto.
+ * Compatible with the C# client (DuckDbClient) and any client
  * generated from the same .proto file.
  */
 
