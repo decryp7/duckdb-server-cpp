@@ -71,6 +71,27 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
+            // Two-phase: first execute to get column names, then query for data.
+            // DuckDB is fast enough that the double-execute is negligible.
+            let (col_names, col_count) = {
+                let stmt = match conn.prepare(&sql) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        stat_errors.fetch_add(1, Ordering::Relaxed);
+                        let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                        return;
+                    }
+                };
+                let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+                let count = stmt.column_count();
+                (names, count)
+            };
+
+            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
+                name: name.clone(),
+                r#type: ColumnType::TypeString as i32,
+            }).collect();
+
             let mut stmt = match conn.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
@@ -80,25 +101,13 @@ impl DuckDbService for DuckDbServerImpl {
                 }
             };
 
-            // Execute first to populate column metadata
-            let rows_result = stmt.query_map([], |row| {
-                let col_count = row.as_ref().column_count();
+            let rows = match stmt.query_map([], |row| {
                 let mut values = Vec::with_capacity(col_count);
                 for i in 0..col_count {
                     values.push(row.get::<_, Option<String>>(i).unwrap_or(None));
                 }
                 Ok(values)
-            });
-
-            // Get column names AFTER execution
-            let col_count = stmt.column_count();
-            let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-            let columns: Vec<ColumnMeta> = col_names.iter().map(|name| ColumnMeta {
-                name: name.clone(),
-                r#type: ColumnType::TypeString as i32,
-            }).collect();
-
-            let rows = match rows_result {
+            }) {
                 Ok(r) => r,
                 Err(e) => {
                     stat_errors.fetch_add(1, Ordering::Relaxed);
