@@ -7,8 +7,11 @@
 
 #include <duckdb.h>
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace das {
@@ -48,6 +51,53 @@ struct Shard {
     }
 };
 
+/// Thread-safe query result cache with TTL expiration.
+class QueryCache {
+public:
+    QueryCache(size_t max_entries = 10000, int ttl_seconds = 60)
+        : max_entries_(max_entries), ttl_seconds_(ttl_seconds) {}
+
+    bool try_get(const std::string& sql, std::vector<duckdb::v1::QueryResponse>& out) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = entries_.find(sql);
+        if (it == entries_.end()) { ++misses_; return false; }
+        auto age = std::chrono::steady_clock::now() - it->second.created;
+        if (age > std::chrono::seconds(ttl_seconds_)) {
+            entries_.erase(it); ++misses_; return false;
+        }
+        out = it->second.responses;
+        ++hits_;
+        return true;
+    }
+
+    void put(const std::string& sql, const std::vector<duckdb::v1::QueryResponse>& responses) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (entries_.size() >= max_entries_) evict_expired();
+        if (entries_.size() < max_entries_)
+            entries_[sql] = {responses, std::chrono::steady_clock::now()};
+    }
+
+    void invalidate() { std::lock_guard<std::mutex> lock(mu_); entries_.clear(); }
+
+private:
+    struct Entry {
+        std::vector<duckdb::v1::QueryResponse> responses;
+        std::chrono::steady_clock::time_point created;
+    };
+    void evict_expired() {
+        auto now = std::chrono::steady_clock::now();
+        for (auto it = entries_.begin(); it != entries_.end(); )
+            if ((now - it->second.created) > std::chrono::seconds(ttl_seconds_))
+                it = entries_.erase(it);
+            else ++it;
+    }
+    std::unordered_map<std::string, Entry> entries_;
+    std::mutex mu_;
+    size_t max_entries_;
+    int ttl_seconds_;
+    long long hits_ = 0, misses_ = 0;
+};
+
 class DuckGrpcServer final : public duckdb::v1::DuckDbService::Service {
 public:
     explicit DuckGrpcServer(const ServerConfig& cfg);
@@ -78,6 +128,7 @@ private:
 
     ServerConfig cfg_;
     std::vector<std::unique_ptr<Shard>> shards_;
+    QueryCache cache_;
     std::atomic<size_t> next_read_shard_;
 
     std::atomic<long long> stat_queries_read_;

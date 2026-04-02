@@ -315,11 +315,19 @@ grpc::Status DuckGrpcServer::Query(
     grpc::ServerWriter<duckdb::v1::QueryResponse>* writer)
 {
     try {
+        // Cache check
+        std::vector<duckdb::v1::QueryResponse> cached;
+        if (cache_.try_get(request->sql(), cached)) {
+            for (auto& resp : cached) writer->Write(resp);
+            stat_queries_read_.fetch_add(1);
+            return grpc::Status::OK;
+        }
+
         auto& shard = next_for_read();
         auto handle = shard.pool->borrow();
 
-        // Execute query (materialized — simpler and more compatible than streaming)
         duckdb_result result;
+        std::vector<duckdb::v1::QueryResponse> to_cache;
         if (duckdb_query(handle.get(), request->sql().c_str(), &result) == DuckDBError) {
             std::string err = duckdb_result_error(&result);
             duckdb_destroy_result(&result);
@@ -374,10 +382,10 @@ grpc::Status DuckGrpcServer::Query(
             }
 
             duckdb_destroy_data_chunk(&chunk);
+            to_cache.push_back(response);
             writer->Write(response);
         }
 
-        // Empty result: send schema-only
         if (first_chunk) {
             response.Clear();
             response.set_row_count(0);
@@ -386,8 +394,12 @@ grpc::Status DuckGrpcServer::Query(
                 meta->set_name(col_names[c]);
                 meta->set_type(col_types[c]);
             }
+            to_cache.push_back(response);
             writer->Write(response);
         }
+
+        // Cache for future hits
+        cache_.put(request->sql(), to_cache);
 
         duckdb_destroy_result(&result);
         stat_queries_read_.fetch_add(1);
@@ -418,6 +430,7 @@ grpc::Status DuckGrpcServer::Execute(
         response->set_error(wr.error);
         return grpc::Status::OK;
     }
+    cache_.invalidate();
     stat_queries_write_.fetch_add(1);
     response->set_success(true);
     return grpc::Status::OK;

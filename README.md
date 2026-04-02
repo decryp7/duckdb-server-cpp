@@ -1,252 +1,108 @@
 # DuckDB gRPC Server  v5.0
 
-A DuckDB database server over **gRPC** with three server implementations
-(C#, C++, Rust) and a .NET 4.6.2 client library.
-All servers use the same `proto/duckdb_service.proto` — fully interoperable.
+Three server implementations (C#, C++, Rust) and a .NET 4.6.2 client.
+All use the same `proto/duckdb_service.proto` — fully interoperable.
+
+---
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                                                                     │
-│  Clients (any language with gRPC + protobuf)                        │
-│                                                                     │
-│  C# (.NET 4.6.2)    C++ (protoc)    Python / Java / Go / Rust      │
-│  DuckDbClient     generated       generated from .proto          │
-│                                                                     │
-│    Query(sql)        ──────────► stream of rows (protobuf)          │
-│    Execute(sql)      ──────────► success / error                    │
-│    Ping()            ──────────► "pong"                              │
-│    GetStats()        ──────────► server metrics                      │
-│                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│  gRPC / HTTP/2 (proto/duckdb_service.proto)                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  Server (C# or C++)                                                 │
-│                                                                     │
-│  ┌───────────────────────────┐  ┌────────────────────────────────┐  │
-│  │  Query (reads)            │  │  Execute (writes)              │  │
-│  │                           │  │                                │  │
-│  │  ConnectionPool           │  │  WriteSerializer               │  │
-│  │  (N read connections)     │  │  (batch DML into transactions) │  │
-│  │  ConcurrentBag +          │  │  INSERT merging                │  │
-│  │  SemaphoreSlim            │  │  DDL auto-detection            │  │
-│  └─────────────┬─────────────┘  └──────────────┬─────────────────┘  │
-│                │                                │                    │
-│                └────────────┬───────────────────┘                    │
-│                             ▼                                        │
-│                        DuckDB                                        │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Client (any language with gRPC + protobuf)                  │
+│    Query(sql) → stream of columnar rows                      │
+│    Execute(sql) → success/error                              │
+│    BulkInsert(table, data) → rows inserted                   │
+│    Ping() → "pong"    GetStats() → metrics                   │
+├──────────────────────────────────────────────────────────────┤
+│  gRPC / HTTP/2 (proto/duckdb_service.proto)                  │
+├──────────────────────────────────────────────────────────────┤
+│  Server (C# / C++ / Rust)                                    │
+│                                                              │
+│  QueryCache ──► cache hit? return from memory (0.1ms)        │
+│       │                                                      │
+│       ▼ miss                                                 │
+│  ShardedDuckDb (N independent database instances)            │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐        │
+│  │ Shard 0  │ │ Shard 1  │ │ Shard 2  │ │ Shard 3  │        │
+│  │ Pool+Wrt │ │ Pool+Wrt │ │ Pool+Wrt │ │ Pool+Wrt │        │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘        │
+│       └─────┬──────┴─────┬──────┘             │              │
+│         READ: round-robin    WRITE: fan-out to all           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Quick start
 
-### 1. Build
-
 ```powershell
-# Clone and open in VS2017
 git clone https://github.com/decryp7/duckdb-server-cpp.git
 cd duckdb-server-cpp
-
-# Restore NuGet packages
-nuget restore DuckDbServer.sln
-
-# Open DuckDbServer.sln in VS2017 → Build Solution
+nuget restore DuckDbServer.sln    # C# dependencies
+# Build Release in VS2017
+run_server.bat                    # Start C# server
+run_benchmark.bat --quick         # Benchmark
 ```
 
-### 2. Run the server
+---
 
-```powershell
-run_server.bat
-```
+## Run scripts
 
-### 3. Run the client examples
-
-```powershell
-run_client.bat
-```
-
-### 4. Run the benchmark
-
-```powershell
-run_benchmark.bat --quick
-```
+| Script | What it does |
+|--------|-------------|
+| `run_server.bat` | C# server (Release, 4 shards, 128 readers) |
+| `run_client.bat` | C# client examples |
+| `run_benchmark.bat` | Performance benchmark (--quick / --full) |
+| `run_cpp_server.bat` | C++ server (requires gRPC from build_grpc.bat) |
+| `run_rust_server.bat` | Rust server (`cd rust-server && cargo build --release`) |
 
 ---
 
 ## Protocol
 
-Defined in `proto/duckdb_service.proto`. Pure protobuf — no Arrow, no FlatBuffers.
+Defined in `proto/duckdb_service.proto`. Columnar encoding.
 
-| RPC | Type | Request | Response |
-|-----|------|---------|----------|
-| `Query` | Server-streaming | `{sql}` | `{columns}` then `{rows}` batches |
-| `Execute` | Unary | `{sql}` | `{success, error}` |
-| `Ping` | Unary | `{}` | `{message: "pong"}` |
-| `GetStats` | Unary | `{}` | `{queries_read, queries_write, errors, ...}` |
-
-Generate clients for any language:
-```bash
-protoc --python_out=. --grpc_out=. --plugin=protoc-gen-grpc=grpc_python_plugin proto/duckdb_service.proto
-protoc --java_out=. --grpc_out=. --plugin=protoc-gen-grpc=grpc_java_plugin proto/duckdb_service.proto
-protoc --go_out=. --grpc_out=. --plugin=protoc-gen-grpc=grpc_go_plugin proto/duckdb_service.proto
-```
+| RPC | Type | Description |
+|-----|------|-------------|
+| Query | Server-streaming | SQL → columnar rows (ColumnData with packed arrays) |
+| Execute | Unary | DML/DDL → success/error |
+| BulkInsert | Unary | Table + columnar data → rows inserted |
+| Ping | Unary | → "pong" |
+| GetStats | Unary | → metrics (reads, writes, errors, pool size) |
 
 ---
 
-## Client usage (.NET 4.6.2)
+## Performance features
 
-```csharp
-using DuckDbClient;
-using System.Data;
-
-// One client handles all concurrent callers (HTTP/2 multiplexing)
-using (var client = new DuckDbClient("server", 17777))
-{
-    // Read query → rows
-    using (var result = client.Query("SELECT * FROM sales"))
-    {
-        DataTable dt = result.ToDataTable();
-        myDataGridView.DataSource = dt;
-    }
-
-    // Write
-    client.Execute("INSERT INTO events VALUES (1, 'login')");
-
-    // Ping
-    client.Ping();
-
-    // Stats
-    Console.WriteLine(client.GetStats());
-}
-
-// TLS
-var creds = new Grpc.Core.SslCredentials(File.ReadAllText("ca.crt"));
-using (var client = new DuckDbClient("server", 17777, creds))
-    client.Ping();
-```
+| Feature | Description |
+|---------|-------------|
+| **Sharding** | N independent DuckDB instances, read-all/write-all |
+| **Query cache** | LRU with TTL, bypasses DuckDB on cache hit (~0.1ms) |
+| **Columnar encoding** | Packed arrays per column (10 objects vs 11,000 per-cell) |
+| **Connection pool** | ConcurrentBag + SemaphoreSlim (lock-free reads) |
+| **Write batching** | Concurrent writes batched into single transactions |
+| **INSERT merging** | N individual INSERTs → 1 multi-row INSERT |
+| **DDL detection** | CREATE/DROP run outside transactions automatically |
+| **DuckDB tuning** | threads=1, preserve_insertion_order=false, checkpoint 256MB |
+| **Server GC** | .NET server GC mode (1 thread per CPU core) |
+| **gRPC tuning** | 200 max streams, 2MB write buffer, keepalive |
 
 ---
 
-## File map
-
-```
-.
-├── DuckDbServer.sln              VS2017 solution (all projects)
-├── nuget.config                     Shared NuGet packages directory
-├── generate_proto.bat               Regenerate C# code from .proto
-├── run_server.bat                   Launch server (high performance)
-├── run_client.bat                   Run client examples
-├── run_benchmark.bat                Run performance benchmark
-├── run_cpp_server.bat               Launch C++ server
-│
-├── proto/
-│   └── duckdb_service.proto         Protocol definition (all languages)
-│
-├── shared/                          Shared proto types (C# class library)
-│   ├── DuckDbShared.csproj
-│   └── Generated/                   Pre-generated from .proto
-│       ├── DuckdbService.cs         Protobuf message classes
-│       └── DuckdbServiceGrpc.cs     gRPC server base + client stubs
-│
-├── server/                          C# server (.NET 4.6.2, x64)
-│   ├── DuckDbServer.csproj
-│   ├── Program.cs                   CLI, signal handling, gRPC startup
-│   ├── DuckDbServer.cs          Query / Execute / Ping / GetStats
-│   ├── DatabaseManager.cs           Shared DB connections + PRAGMA tuning
-│   ├── IConnectionPool.cs           Connection pool interface
-│   ├── ConnectionPool.cs            ConcurrentBag + SemaphoreSlim pool
-│   ├── IWriteSerializer.cs          Write serializer interface
-│   ├── WriteSerializer.cs           Batched writes + INSERT merging
-│   ├── DdlDetector.cs               DDL vs DML detection
-│   ├── InsertParser.cs              Parse INSERT for merging
-│   ├── InsertBatcher.cs             Merge INSERTs into multi-row
-│   └── ServerConfig.cs              Config, stats, WriteResult
-│
-├── client/                          C# client (.NET 4.6.2, x86)
-│   ├── DuckDbClient.csproj
-│   ├── DuckDbClient.cs           gRPC client (Query/Execute/Ping/Stats)
-│   ├── Interfaces.cs                IDuckDbClient, IQueryResult
-│   ├── DuckDbException.cs              Typed exception
-│   └── Example.cs                   6 usage examples
-│
-├── benchmark/                       Performance benchmark (.NET 4.6.2, x86)
-│   ├── DuckDbBenchmark.csproj
-│   ├── Program.cs                   --quick / standard / --full modes
-│   ├── BenchmarkRunner.cs           6 scenario types
-│   └── BenchmarkResult.cs           Latency tracking + reporting
-│
-├── cpp/                             C++ server (VS2017, x64, vcpkg)
-│   └── DuckDbServerCpp.vcxproj  Pre-build protoc + gRPC server
-│
-├── include/                         C++ headers
-│   ├── grpc_server.hpp              DuckGrpcServer class
-│   ├── connection_pool.hpp          Thread-safe connection pool
-│   ├── write_serializer.hpp         Batched write transactions
-│   └── insert_batcher.hpp           INSERT merging
-│
-├── src/                             C++ implementation
-│   ├── main_grpc.cpp                Entry point
-│   ├── grpc_server.cpp              Query / Execute / Ping / GetStats
-│   └── connection_pool.cpp          (stub; impl in header)
-│
-├── PROTOCOL_GRPC.md                 Protocol design rationale
-├── DESIGN.md                        Architecture documentation
-├── CHANGELOG.md                     Version history
-└── CLAUDE.md                        AI context file
-```
-
----
-
-## Performance tuning
-
-### Server flags
+## Server flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--db` | `:memory:` | DuckDB file path |
-| `--host` | `0.0.0.0` | Bind address |
 | `--port` | `17777` | gRPC listen port |
-| `--readers` | `nCPU×2` | Read connection pool size |
+| `--shards` | `1` | Number of DuckDB instances |
+| `--readers` | `nCPU×2` | Total connection pool size |
 | `--batch-ms` | `5` | Write batch window (ms) |
 | `--batch-max` | `512` | Max writes per batch |
-| `--batch-size` | `8192` | Rows per gRPC response message |
-| `--memory-limit` | 80% RAM | DuckDB memory limit (e.g. `4GB`) |
-| `--threads` | nCPU | DuckDB internal thread count |
-| `--tls-cert` | — | TLS certificate PEM path |
-| `--tls-key` | — | TLS private key PEM path |
-
-### Workload presets
-
-| Workload | --readers | --batch-ms | --batch-max | --batch-size |
-|----------|-----------|------------|-------------|--------------|
-| Low-latency (100 concurrent) | 128 | 1 | 64 | 512 |
-| Read-heavy (BI) | `nCPU×2` | 5 | 512 | 8192 |
-| Write-heavy (ETL) | `nCPU` | 50 | 5000 | 8192 |
-| Mixed | `nCPU×2` | 10 | 1000 | 4096 |
-
-### Performance features (automatic)
-
-- **Connection pool**: `ConcurrentBag` + `SemaphoreSlim` (lock-free under low contention)
-- **INSERT merging**: N individual INSERTs become 1 multi-row INSERT
-- **Write batching**: concurrent writes share one `BEGIN...COMMIT` transaction
-- **DDL detection**: `CREATE`/`DROP`/`ALTER` run outside transactions automatically
-- **DuckDB tuning**: `enable_object_cache`, `preserve_insertion_order=false`
-- **Bulk row read**: `GetValues()` reads all columns in one call
-
-### Client best practices
-
-```csharp
-// ONE client per app — HTTP/2 multiplexes all concurrent RPCs
-using (var client = new DuckDbClient("server", 17777))
-{
-    // Use async for concurrent queries
-    var tasks = queries.Select(sql => client.QueryAsync(sql));
-    var results = await Task.WhenAll(tasks);
-}
-```
+| `--batch-size` | `8192` | Rows per gRPC response |
+| `--memory-limit` | 80% RAM | DuckDB memory limit |
+| `--threads` | `1` | DuckDB threads per connection |
 
 ---
 
@@ -256,13 +112,49 @@ using (var client = new DuckDbClient("server", 17777))
 |-----------|-------------|
 | C# server | Grpc.Core 2.46.6, Google.Protobuf 3.24.4, DuckDB.NET.Data.Full 1.1.1 |
 | C# client | Grpc.Core 2.46.6, Google.Protobuf 3.24.4 |
-| C++ server | gRPC 1.35.0 (built from source via `build_grpc.bat`), DuckDB (third_party/) |
-| **Rust server** | **tonic 0.12, prost 0.13, duckdb 1.1 (bundled), tokio** |
+| C++ server | gRPC 1.35.0 (build_grpc.bat), DuckDB (third_party/) |
+| Rust server | tonic 0.12, prost 0.13, duckdb 1.1 (bundled) |
 
-All versions communicate via the same gRPC wire protocol (HTTP/2 + protobuf).
-Different gRPC versions are fully interoperable — only the `.proto` file must match.
+---
 
-No Apache Arrow dependency.
+## File map
+
+```
+DuckDbServer.sln                 VS2017 solution (C# projects)
+proto/duckdb_service.proto       Protocol definition (all languages)
+generate_proto.bat               Regenerate C# proto code
+
+server/                          C# server
+  DuckDbServer.cs                gRPC handlers (thin, delegates to:)
+  ShardedDuckDb.cs               Read-all/write-all sharding
+  QueryCache.cs                  LRU cache with TTL
+  ConnectionPool.cs              Lock-free pool (ConcurrentBag)
+  WriteSerializer.cs             Batch writes + INSERT merging
+  ColumnBuilder.cs               Columnar protobuf packing
+  DatabaseManager.cs             Shared DB + PRAGMAs
+  DdlDetector.cs                 DDL vs DML detection
+  InsertParser.cs + Batcher.cs   INSERT merging
+
+client/                          C# client (.NET 4.6.2)
+  DuckDbClient.cs                gRPC client
+  Interfaces.cs                  IDuckDbClient, IQueryResult
+
+benchmark/                       Performance benchmark
+  BenchmarkRunner.cs             6 scenario types
+  Program.cs                     --quick / --full modes
+
+rust-server/                     Rust server
+  src/main.rs                    tonic gRPC + query_arrow
+  src/shard.rs                   Sharding
+  src/pool.rs                    Connection pool (try_clone)
+  src/cache.rs                   Query cache
+  src/writer.rs                  Write batching
+
+cpp/                             C++ server (VS2017)
+  DuckDbServerCpp.vcxproj        Project file
+include/                         C++ headers
+src/                             C++ implementation
+```
 
 ---
 
@@ -270,9 +162,7 @@ No Apache Arrow dependency.
 
 | Version | Summary |
 |---|---|
-| **v5.0.0** | Custom gRPC protocol, removed Arrow dependency, pure protobuf data transfer, C++ and C# servers from same .proto |
-| v4.0.0–v4.1.9 | gRPC rewrite, .NET client, 48 bugs fixed across 15 review rounds |
-| v3.1.x | IOCP server, VS 2017 fixes, streaming, stats, auto-reconnect |
-| v3.0.0 | Windows IOCP edition |
-| v2.0.0 | Thread pool + connection pool scaling |
-| v1.0.0 | Initial C++11 server |
+| **v5.0** | Custom gRPC, no Arrow, sharding, caching, 3 server implementations |
+| v4.x | Arrow Flight (removed — .NET 4.6.2 incompatible) |
+| v3.x | IOCP server |
+| v1-2 | Initial C++ server |
