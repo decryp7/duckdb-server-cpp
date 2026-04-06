@@ -91,6 +91,8 @@ impl ConnectionPool {
         let _ = conn.execute_batch("SET preserve_insertion_order=false");
         let _ = conn.execute_batch("PRAGMA enable_object_cache");
         let _ = conn.execute_batch("SET checkpoint_threshold='256MB'");
+        let _ = conn.execute_batch("SET late_materialization_max_rows=1000");
+        let _ = conn.execute_batch("SET allocator_flush_threshold='128MB'");
     }
 
     pub fn borrow(&self) -> Result<Handle, String> {

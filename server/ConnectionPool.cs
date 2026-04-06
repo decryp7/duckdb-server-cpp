@@ -287,6 +287,11 @@ namespace DuckDbServer
                     cmd.CommandText = "PRAGMA enable_object_cache";
                     cmd.ExecuteNonQuery();
                 }
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SET late_materialization_max_rows=1000";
+                    cmd.ExecuteNonQuery();
+                }
             }
             catch { /* best-effort -- PRAGMAs are optimization hints, not requirements */ }
         }

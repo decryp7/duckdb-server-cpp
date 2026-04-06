@@ -92,6 +92,13 @@ struct ServerConfig {
     /// Path to PEM-encoded TLS private key.  Must be set together with
     /// tls_cert_path; if both are empty, the server uses plaintext HTTP/2.
     std::string tls_key_path;
+
+    /// Per-shard memory limit, e.g. "4GB", "512MB".
+    /// Empty = auto-calculate per shard (80% / shard_count).
+    std::string memory_limit;
+
+    /// Path for DuckDB spill-to-disk temp directory.  Empty = DuckDB default.
+    std::string temp_directory;
 };
 
 /**

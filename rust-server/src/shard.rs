@@ -37,7 +37,7 @@ pub struct ShardedDuckDb {
 
 impl ShardedDuckDb {
     pub fn new(db_path: &str, shard_count: usize, readers_per_shard: usize,
-               batch_ms: u64, batch_max: usize) -> Result<Self, String>
+               batch_ms: u64, batch_max: usize, temp_dir: &str) -> Result<Self, String>
     {
         let shard_count = std::cmp::max(1, shard_count);
         let mut shards = Vec::with_capacity(shard_count);
@@ -49,6 +49,19 @@ impl ShardedDuckDb {
 
             let writer = {
                 let conn = pool.borrow().map_err(|e| e)?;
+                // Set database-level threads for background tasks (checkpoint, etc.)
+                let cpus = num_cpus::get();
+                let db_threads = std::cmp::max(1, cpus / shard_count);
+                let _ = conn.execute_batch(&format!("SET threads={}", db_threads));
+                // Auto memory limit per shard
+                if shard_count > 1 {
+                    let pct = std::cmp::max(10, 80 / shard_count);
+                    let _ = conn.execute_batch(&format!("SET memory_limit='{}%'", pct));
+                }
+                // Temp directory for spill-to-disk
+                if !temp_dir.is_empty() {
+                    let _ = conn.execute_batch(&format!("SET temp_directory='{}'", temp_dir));
+                }
                 Arc::new(WriteSerializer::from_conn(&conn, batch_ms, batch_max)?)
             };
 

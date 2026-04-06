@@ -339,6 +339,7 @@ namespace DuckDbServer
                     case "--batch-size":   config.BatchSize = ParsePositive(value, "--batch-size"); break;
                     case "--memory-limit": config.MemoryLimit = value; break;
                     case "--threads":      config.DuckDbThreads = ParsePositive(value, "--threads"); break;
+                    case "--temp-dir":     config.TempDirectory = value; break;
                     case "--tls-cert":     config.TlsCertPath = value; break;
                     case "--tls-key":   config.TlsKeyPath = value; break;
                     default:

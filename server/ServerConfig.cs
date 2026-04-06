@@ -198,6 +198,9 @@ namespace DuckDbServer
         /// </summary>
         public int QueryTimeoutSeconds { get; set; } = 30;
 
+        /// <summary>Path to temp directory for DuckDB spill-to-disk. Empty = DuckDB default.</summary>
+        public string TempDirectory { get; set; } = "";
+
         /// <summary>
         /// Path to a TLS certificate PEM file for encrypted gRPC connections.
         ///

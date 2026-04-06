@@ -32,6 +32,7 @@
 #include <iostream>
 #include <thread>
 #include <cstring>
+#include <google/protobuf/arena.h>
 
 namespace das {
 
@@ -109,11 +110,36 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         s->writer = std::unique_ptr<IWriteSerializer>(
             new WriteSerializer(s->writer_conn, cfg_.write_batch_ms, cfg_.write_batch_max));
 
-        // Per-shard DuckDB tuning
-        duckdb_query(s->writer_conn, "SET threads=1", nullptr);
+        // Auto-calculate memory limit per shard if not explicitly set
+        if (cfg_.memory_limit.empty() && shard_count > 1) {
+            int pct = std::max(10, 80 / shard_count);
+            std::string limit = "SET memory_limit='" + std::to_string(pct) + "%'";
+            duckdb_query(s->writer_conn, limit.c_str(), nullptr);
+        } else if (!cfg_.memory_limit.empty()) {
+            std::string limit = "SET memory_limit='" + cfg_.memory_limit + "'";
+            duckdb_query(s->writer_conn, limit.c_str(), nullptr);
+        }
+
+        // Set temp directory for spill-to-disk
+        if (!cfg_.temp_directory.empty()) {
+            std::string td = "SET temp_directory='" + cfg_.temp_directory + "'";
+            duckdb_query(s->writer_conn, td.c_str(), nullptr);
+        }
+
+        // Per-shard DuckDB tuning: divide CPU cores across shards to prevent
+        // over-subscription. Each pool connection also sets threads=1 individually.
+        {
+            unsigned hw = std::thread::hardware_concurrency();
+            if (!hw) hw = 4;
+            int db_threads = std::max(1, static_cast<int>(hw) / shard_count);
+            std::string t = "SET threads=" + std::to_string(db_threads);
+            duckdb_query(s->writer_conn, t.c_str(), nullptr);
+        }
         duckdb_query(s->writer_conn, "PRAGMA enable_object_cache", nullptr);
         duckdb_query(s->writer_conn, "SET preserve_insertion_order=false", nullptr);
         duckdb_query(s->writer_conn, "SET checkpoint_threshold='256MB'", nullptr);
+        duckdb_query(s->writer_conn, "SET late_materialization_max_rows=1000", nullptr);
+        duckdb_query(s->writer_conn, "SET allocator_flush_threshold='128MB'", nullptr);
 
         shards_.push_back(std::move(s));
     }

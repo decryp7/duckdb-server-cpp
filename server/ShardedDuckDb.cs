@@ -100,7 +100,7 @@ namespace DuckDbServer
 
                 // Each shard gets its own DatabaseManager (owns the primary DuckDB connection),
                 // ConnectionPool (for read parallelism), and WriteSerializer (for batched writes).
-                var dbManager = new DatabaseManager(dbPath, config);
+                var dbManager = new DatabaseManager(dbPath, config, shardCount);
                 var pool = new ConnectionPool(dbManager, readersPerShard);
                 var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
 

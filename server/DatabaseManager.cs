@@ -76,7 +76,7 @@ namespace DuckDbServer
         /// database file does not exist, DuckDB creates it. If the file is locked by
         /// another process, the constructor throws.
         /// </remarks>
-        public DatabaseManager(string dbPath, ServerConfig config)
+        public DatabaseManager(string dbPath, ServerConfig config, int shardCount = 1)
         {
             connectionString = BuildConnectionString(dbPath);
 
@@ -86,7 +86,7 @@ namespace DuckDbServer
             primaryConnection.Open();
 
             // Apply database-level performance settings via the primary connection.
-            ApplyPerformanceSettings(config);
+            ApplyPerformanceSettings(config, shardCount);
         }
 
         /// <summary>
@@ -141,8 +141,16 @@ namespace DuckDbServer
         /// pool connections.</para>
         /// </summary>
         /// <param name="config">Server configuration with tuning parameters.</param>
-        private void ApplyPerformanceSettings(ServerConfig config)
+        private void ApplyPerformanceSettings(ServerConfig config, int shardCount)
         {
+            // Auto-calculate per-shard memory limit when not explicitly set and running
+            // multiple shards. Divides 80% of system RAM evenly across shards.
+            if (string.IsNullOrEmpty(config.MemoryLimit) && shardCount > 1)
+            {
+                var autoLimit = "'" + (80 / shardCount) + "%'";
+                ExecutePragma("SET memory_limit=" + autoLimit);
+            }
+
             // Memory limit: controls the maximum RAM DuckDB uses for buffer management
             // and query processing. When exceeded, DuckDB spills to disk (if file-based)
             // or returns an error (if in-memory). Default: 80% of system RAM.
@@ -158,6 +166,8 @@ namespace DuckDbServer
             // nCPU threads per connection, leading to severe over-subscription.
             if (config.DuckDbThreads > 0)
                 ExecutePragma("SET threads=" + config.DuckDbThreads);
+            else if (shardCount > 1)
+                ExecutePragma("SET threads=" + Math.Max(1, Environment.ProcessorCount / shardCount));
             else
                 ExecutePragma("SET threads=1");
 
@@ -184,6 +194,20 @@ namespace DuckDbServer
             // Disable the progress bar. In server mode, there is no terminal to display
             // progress, and the progress tracking adds CPU overhead to long-running queries.
             ExecutePragma("PRAGMA enable_progress_bar=false");
+
+            // Late materialization: limits the number of rows materialized before filtering,
+            // improving performance for selective queries on wide tables.
+            ExecutePragma("SET late_materialization_max_rows=1000");
+
+            // Allocator flush threshold: controls when DuckDB returns unused memory to the OS.
+            // A 128MB threshold prevents excessive memory retention while avoiding frequent
+            // allocation/deallocation overhead.
+            ExecutePragma("SET allocator_flush_threshold='128MB'");
+
+            // Temp directory: configurable spill-to-disk location for queries that exceed
+            // the memory limit.
+            if (!string.IsNullOrEmpty(config.TempDirectory))
+                ExecutePragma("SET temp_directory='" + config.TempDirectory + "'");
         }
 
         /// <summary>
