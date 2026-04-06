@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-06T00:00:00.000Z" agent="DuckDB gRPC Server" version="21.0.0">
+  <diagram id="system-arch" name="System Architecture">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="DuckDB gRPC Server — System Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="500" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Client Layer -->
+        <mxCell id="client-group" value="Client Layer" style="swimlane;startSize=25;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="350" y="80" width="600" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="client-cs" value="C# Client&#10;(.NET 4.6.2)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="client-group">
+          <mxGeometry x="30" y="35" width="130" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="client-any" value="Any gRPC Client&#10;(Python, Go, Java...)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="client-group">
+          <mxGeometry x="200" y="35" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="client-bench" value="Benchmark Tool&#10;(C# .NET 4.6.2)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="client-group">
+          <mxGeometry x="400" y="35" width="150" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- gRPC Transport -->
+        <mxCell id="grpc" value="gRPC / HTTP/2&#10;proto/duckdb_service.proto  |  Port 17777&#10;Query (streaming) | Execute | BulkInsert | Ping | GetStats" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="350" y="200" width="600" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Server Implementations -->
+        <mxCell id="server-group" value="Server Implementations (interchangeable)" style="swimlane;startSize=25;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="350" y="290" width="600" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="srv-cs" value="C# Server&#10;Grpc.Core 2.46.6&#10;VS2017 / .NET 4.6.2" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="server-group">
+          <mxGeometry x="20" y="30" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="srv-cpp" value="C++ Server&#10;gRPC 1.35.0&#10;DuckDB C API + Chunk" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="server-group">
+          <mxGeometry x="210" y="30" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="srv-rs" value="Rust Server&#10;tonic 0.12&#10;query_arrow() zero-copy" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="server-group">
+          <mxGeometry x="400" y="30" width="160" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Query Cache -->
+        <mxCell id="cache" value="QueryCache&#10;LRU + TTL (60s)&#10;Max 10K entries&#10;Cache hit ~0.1ms" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="530" y="410" width="240" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ShardedDuckDb -->
+        <mxCell id="sharded" value="ShardedDuckDb&#10;READ: Round-Robin  |  WRITE: Fan-out to All" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="350" y="500" width="600" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Shard 0 -->
+        <mxCell id="shard0-group" value="Shard 0" style="swimlane;startSize=20;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="140" y="590" width="200" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="pool0" value="ConnectionPool&#10;N reader connections" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="shard0-group">
+          <mxGeometry x="20" y="30" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="writer0" value="WriteSerializer&#10;Batch + Merge INSERTs" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="shard0-group">
+          <mxGeometry x="20" y="80" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="db0" value="DuckDB&#10;Instance 0" style="shape=cylinder3;whiteSpace=wrap;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="shard0-group">
+          <mxGeometry x="50" y="135" width="100" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Shard 1 -->
+        <mxCell id="shard1-group" value="Shard 1" style="swimlane;startSize=20;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="380" y="590" width="200" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="pool1" value="ConnectionPool&#10;N reader connections" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="shard1-group">
+          <mxGeometry x="20" y="30" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="writer1" value="WriteSerializer&#10;Batch + Merge INSERTs" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="shard1-group">
+          <mxGeometry x="20" y="80" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="db1" value="DuckDB&#10;Instance 1" style="shape=cylinder3;whiteSpace=wrap;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="shard1-group">
+          <mxGeometry x="50" y="135" width="100" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Shard N -->
+        <mxCell id="shardn-group" value="Shard N" style="swimlane;startSize=20;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="620" y="590" width="200" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="pooln" value="ConnectionPool&#10;N reader connections" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="shardn-group">
+          <mxGeometry x="20" y="30" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="writern" value="WriteSerializer&#10;Batch + Merge INSERTs" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="shardn-group">
+          <mxGeometry x="20" y="80" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="dbn" value="DuckDB&#10;Instance N" style="shape=cylinder3;whiteSpace=wrap;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="shardn-group">
+          <mxGeometry x="50" y="135" width="100" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrows -->
+        <mxCell id="e1" edge="1" source="client-group" target="grpc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" edge="1" source="grpc" target="server-group" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" edge="1" source="server-group" target="cache" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" edge="1" source="cache" target="sharded" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" edge="1" source="sharded" target="shard0-group" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" edge="1" source="sharded" target="shard1-group" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" edge="1" source="sharded" target="shardn-group" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" edge="1" source="pool0" target="db0" parent="shard0-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" edge="1" source="writer0" target="db0" parent="shard0-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

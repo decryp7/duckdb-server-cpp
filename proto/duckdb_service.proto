@@ -1,28 +1,91 @@
+// ============================================================================
 // DuckDB gRPC Server — Protocol Definition v5.2
+// ============================================================================
 //
-// COLUMNAR encoding: values are packed into typed arrays per column,
-// not wrapped in per-cell messages. This eliminates ~99% of protobuf
-// object allocations compared to row-by-row encoding.
+// This proto defines the gRPC service for all three server implementations
+// (C#, C++, Rust). Any client generated from this proto can talk to any server.
 //
-// 1000 rows × 10 columns:
-//   Row format:  10,000 TypedValue objects + 1,000 Row objects = 11,000 allocs
-//   Columnar:    10 Column objects with packed repeated fields = 10 allocs
+// KEY DESIGN DECISION: COLUMNAR ENCODING
+//
+//   Values are packed into typed arrays per column, not wrapped in per-cell
+//   messages. This eliminates ~99% of protobuf object allocations compared
+//   to traditional row-by-row encoding.
+//
+//   Performance comparison for 1000 rows × 10 columns:
+//     Row format:     10,000 TypedValue + 1,000 Row objects = 11,000 allocs
+//     Columnar (this): 10 ColumnData with packed repeated    = 10 allocs
+//
+//   Packed repeated fields (e.g. repeated int32 [packed=true]) are stored
+//   as contiguous byte arrays in the protobuf wire format, enabling memcpy
+//   from DuckDB's internal columnar storage directly into protobuf buffers.
+//
+// NULL HANDLING:
+//   Rather than a separate oneof/optional per value, null row indices are
+//   stored in a sparse list (null_indices). This avoids per-cell overhead
+//   for the common case where most values are non-null.
+//
+// TYPE WIDENING:
+//   DuckDB INT8/INT16/UINT8/UINT16 are widened to int32 in the proto
+//   (protobuf has no native 8/16-bit types). UINT32 is widened to int64.
+//   DECIMAL is stored as double (lossy for >15 significant digits).
+//
+// GENERATED CODE:
+//   C#:   generate_proto.bat → shared/Generated/DuckdbService.cs
+//   C++:  protoc via DuckDbServerCpp.vcxproj pre-build step
+//   Rust: tonic-build in rust-server/build.rs
+// ============================================================================
 
 syntax = "proto3";
 
 package duckdb.v1;
 
+// C# namespace for generated code (used by Grpc.Core 2.46.6 / .NET 4.6.2)
 option csharp_namespace = "DuckDbProto";
 
+// ============================================================================
+// Service Definition
+// ============================================================================
+//
+// Five RPCs covering read, write, bulk load, health check, and monitoring.
+// All RPCs use unary request/response except Query which is server-streaming
+// to handle result sets larger than a single gRPC message (max 64MB default).
 service DuckDbService {
+
+  // Execute a SQL SELECT query and stream columnar results.
+  // Server-streaming: the server sends multiple QueryResponse messages,
+  // each containing a batch of rows. The first message includes column
+  // metadata (names + types). All messages include row data.
+  //
+  // Cache behavior: results are cached in QueryCache. Subsequent identical
+  // queries return from cache (~0.1ms) without touching DuckDB.
+  //
+  // Sharding: query is routed to a single shard via round-robin.
   rpc Query (QueryRequest) returns (stream QueryResponse);
+
+  // Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE TABLE, etc.)
+  // Write is fan-out to ALL shards to keep data consistent.
+  // Cache is fully invalidated after every successful write.
+  //
+  // Write batching: concurrent Execute calls are batched by the
+  // WriteSerializer into single transactions for higher throughput.
+  // Compatible INSERTs are merged into multi-row statements.
   rpc Execute (ExecuteRequest) returns (ExecuteResponse);
 
-  // Bulk insert using DuckDB Appender API (100x faster than INSERT SQL).
-  // Bypasses SQL parser entirely — writes directly to storage.
-  // Client sends columnar data; server appends via duckdb_appender.
+  // Bulk insert columnar data into an existing table.
+  // Server builds a multi-row INSERT SQL and routes through WriteSerializer.
+  // Fan-out to ALL shards. Cache is invalidated after success.
+  //
+  // Note: The proto comment mentions "Appender API" but the current
+  // implementation builds SQL to avoid thread-safety issues with direct
+  // connection access while the WriteSerializer background thread is running.
   rpc BulkInsert (BulkInsertRequest) returns (BulkInsertResponse);
+
+  // Health check. Returns "pong". No database interaction.
+  // Use for load balancer health probes or client connectivity checks.
   rpc Ping (PingRequest) returns (PingResponse);
+
+  // Server metrics: read/write counts, error count, pool size, port.
+  // All counters are monotonically increasing since server start.
   rpc GetStats (StatsRequest) returns (StatsResponse);
 }
 
@@ -45,25 +108,35 @@ message ColumnMeta {
   ColumnType type = 2;
 }
 
+// Column type enum mapping DuckDB types to protobuf storage fields.
+//
+// Type widening rules (protobuf has no native 8/16-bit integer types):
+//   DuckDB TINYINT  (INT8)    → TYPE_INT8   → stored in int32_values
+//   DuckDB SMALLINT (INT16)   → TYPE_INT16  → stored in int32_values
+//   DuckDB UTINYINT (UINT8)   → TYPE_UINT8  → stored in int32_values
+//   DuckDB USMALLINT(UINT16)  → TYPE_UINT16 → stored in int32_values
+//   DuckDB UINTEGER (UINT32)  → TYPE_UINT32 → stored in int64_values (widened)
+//   DuckDB UBIGINT  (UINT64)  → TYPE_UINT64 → stored in int64_values (reinterpreted)
+//   DuckDB DECIMAL           → TYPE_DECIMAL → stored in double_values (lossy)
 enum ColumnType {
-  TYPE_UNKNOWN = 0;
-  TYPE_BOOLEAN = 1;
-  TYPE_INT32 = 2;
-  TYPE_INT64 = 3;
-  TYPE_FLOAT = 4;
-  TYPE_DOUBLE = 5;
-  TYPE_STRING = 6;
-  TYPE_BLOB = 7;
-  TYPE_TIMESTAMP = 8;
-  TYPE_DATE = 9;
-  TYPE_TIME = 10;
-  TYPE_DECIMAL = 11;
-  TYPE_INT8 = 12;
-  TYPE_INT16 = 13;
-  TYPE_UINT8 = 14;
-  TYPE_UINT16 = 15;
-  TYPE_UINT32 = 16;
-  TYPE_UINT64 = 17;
+  TYPE_UNKNOWN = 0;    // Fallback — treated as string
+  TYPE_BOOLEAN = 1;    // DuckDB BOOLEAN  → bool_values
+  TYPE_INT32 = 2;      // DuckDB INTEGER  → int32_values
+  TYPE_INT64 = 3;      // DuckDB BIGINT   → int64_values
+  TYPE_FLOAT = 4;      // DuckDB FLOAT    → float_values
+  TYPE_DOUBLE = 5;     // DuckDB DOUBLE   → double_values
+  TYPE_STRING = 6;     // DuckDB VARCHAR   → string_values
+  TYPE_BLOB = 7;       // DuckDB BLOB     → blob_values
+  TYPE_TIMESTAMP = 8;  // DuckDB TIMESTAMP → string_values (ISO 8601)
+  TYPE_DATE = 9;       // DuckDB DATE     → string_values (YYYY-MM-DD)
+  TYPE_TIME = 10;      // DuckDB TIME     → string_values (HH:MM:SS)
+  TYPE_DECIMAL = 11;   // DuckDB DECIMAL  → double_values (lossy for >15 digits)
+  TYPE_INT8 = 12;      // DuckDB TINYINT  → int32_values (widened from 1 byte)
+  TYPE_INT16 = 13;     // DuckDB SMALLINT → int32_values (widened from 2 bytes)
+  TYPE_UINT8 = 14;     // DuckDB UTINYINT → int32_values (widened from 1 byte)
+  TYPE_UINT16 = 15;    // DuckDB USMALLINT→ int32_values (widened from 2 bytes)
+  TYPE_UINT32 = 16;    // DuckDB UINTEGER → int64_values (widened from 4 bytes)
+  TYPE_UINT64 = 17;    // DuckDB UBIGINT  → int64_values (same 8 bytes, sign reinterpreted)
 }
 
 // Columnar data for one column in a batch.

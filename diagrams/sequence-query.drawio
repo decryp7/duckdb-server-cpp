@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-06T00:00:00.000Z" agent="DuckDB gRPC Server" version="21.0.0">
+  <diagram id="seq-query" name="Sequence: Query (Cache Miss)">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="Sequence Diagram: Query (Cache Miss → DuckDB → Stream → Cache Store)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="800" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Lifelines -->
+        <mxCell id="client-head" value="Client" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};fillColor=#dae8fc;strokeColor=#6c8ebf;size=40;" vertex="1" parent="1">
+          <mxGeometry x="80" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="server-head" value="DuckDbServer" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#d5e8d4;strokeColor=#82b366;size=40;" vertex="1" parent="1">
+          <mxGeometry x="280" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="cache-head" value="QueryCache" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#f8cecc;strokeColor=#b85450;size=40;" vertex="1" parent="1">
+          <mxGeometry x="470" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="shard-head" value="ShardedDuckDb" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#e1d5e7;strokeColor=#9673a6;size=40;" vertex="1" parent="1">
+          <mxGeometry x="660" y="50" width="110" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="pool-head" value="ConnectionPool" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#dae8fc;strokeColor=#6c8ebf;size=40;" vertex="1" parent="1">
+          <mxGeometry x="860" y="50" width="110" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="db-head" value="DuckDB" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#fff2cc;strokeColor=#d6b656;size=40;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+
+        <!-- Messages -->
+        <mxCell id="m1" value="1. Query(sql)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="130" y="120" as="sourcePoint"/>
+            <mxPoint x="330" y="120" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m2" value="2. TryGet(sql)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="160" as="sourcePoint"/>
+            <mxPoint x="520" y="160" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m3" value="miss" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="190" as="sourcePoint"/>
+            <mxPoint x="330" y="190" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m4" value="3. NextForRead()" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="230" as="sourcePoint"/>
+            <mxPoint x="715" y="230" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m5" value="shard[idx % N]" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="715" y="260" as="sourcePoint"/>
+            <mxPoint x="330" y="260" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m6" value="4. Borrow()" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="300" as="sourcePoint"/>
+            <mxPoint x="915" y="300" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m7" value="connection handle" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="915" y="330" as="sourcePoint"/>
+            <mxPoint x="330" y="330" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m8" value="5. ExecuteQuery(sql)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="370" as="sourcePoint"/>
+            <mxPoint x="1110" y="370" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m9" value="result chunks" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1110" y="420" as="sourcePoint"/>
+            <mxPoint x="330" y="420" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Loop box -->
+        <mxCell id="loop" value="loop [each chunk]" style="shape=umlFrame;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;width=100;height=15;" vertex="1" parent="1">
+          <mxGeometry x="100" y="450" width="250" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="m10" value="6. BuildColumnarResponse" style="html=1;verticalAlign=bottom;endArrow=block;endFill=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="490" as="sourcePoint"/>
+            <mxPoint x="340" y="490" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m11" value="7. Write(response)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="530" as="sourcePoint"/>
+            <mxPoint x="130" y="530" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="m12" value="8. Put(sql, responses)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="610" as="sourcePoint"/>
+            <mxPoint x="520" y="610" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m13" value="9. Return(conn)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="660" as="sourcePoint"/>
+            <mxPoint x="915" y="660" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

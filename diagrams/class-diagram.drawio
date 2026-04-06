@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-06T00:00:00.000Z" agent="DuckDB gRPC Server" version="21.0.0">
+  <diagram id="class-diagram" name="Class Diagram (All Servers)">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="DuckDB gRPC Server — Class Diagram" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="10" width="500" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- DuckDbServer (main service) -->
+        <mxCell id="server" value="&lt;b&gt;DuckDbServer&lt;/b&gt;&#10;─────────────────────&#10;- config: ServerConfig&#10;- shardedDb: ShardedDuckDb&#10;- queryCache: IQueryCache&#10;- batchSize: int&#10;- queriesRead: long&#10;- queriesWrite: long&#10;- errors: long&#10;─────────────────────&#10;+ Query(sql) → stream&#10;+ Execute(sql) → result&#10;+ BulkInsert(table, data) → result&#10;+ Ping() → pong&#10;+ GetStats() → metrics&#10;+ Dispose()" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="600" y="60" width="230" height="230" as="geometry"/>
+        </mxCell>
+
+        <!-- ShardedDuckDb -->
+        <mxCell id="sharded" value="&lt;b&gt;ShardedDuckDb&lt;/b&gt;&#10;─────────────────────&#10;- shards: Shard[]&#10;- nextReadShard: atomic long&#10;─────────────────────&#10;+ NextForRead() → Shard&#10;+ WriteToAll(sql) → WriteResult&#10;+ Dispose()&#10;&#10;Strategy: read-all / write-all&#10;Reads: round-robin&#10;Writes: fan-out to all" style="text;html=1;strokeColor=#82b366;fillColor=#d5e8d4;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="330" width="230" height="190" as="geometry"/>
+        </mxCell>
+
+        <!-- Shard -->
+        <mxCell id="shard" value="&lt;b&gt;Shard&lt;/b&gt;&#10;─────────────────────&#10;+ DbManager: DatabaseManager&#10;+ Pool: IConnectionPool&#10;+ Writer: IWriteSerializer" style="text;html=1;strokeColor=#666666;fillColor=#f5f5f5;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="560" width="230" height="100" as="geometry"/>
+        </mxCell>
+
+        <!-- IQueryCache -->
+        <mxCell id="icache" value="&lt;b&gt;«interface»&lt;/b&gt;&#10;&lt;b&gt;IQueryCache&lt;/b&gt;&#10;─────────────────────&#10;+ TryGet(sql) → bool&#10;+ Put(sql, responses)&#10;+ Invalidate()&#10;+ Hits: long&#10;+ Misses: long" style="text;html=1;strokeColor=#b85450;fillColor=#f8cecc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="60" width="200" height="150" as="geometry"/>
+        </mxCell>
+
+        <!-- QueryCache -->
+        <mxCell id="qcache" value="&lt;b&gt;QueryCache&lt;/b&gt;&#10;─────────────────────&#10;- entries: ConcurrentDict&#10;- maxEntries: int (10000)&#10;- ttlSeconds: int (60)&#10;─────────────────────&#10;+ TryGet() → cache hit&#10;+ Put() → store with TTL&#10;+ Invalidate() → clear all&#10;+ InvalidateTable(name)" style="text;html=1;strokeColor=#b85450;fillColor=#f8cecc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="240" width="200" height="170" as="geometry"/>
+        </mxCell>
+
+        <!-- IConnectionPool -->
+        <mxCell id="ipool" value="&lt;b&gt;«interface»&lt;/b&gt;&#10;&lt;b&gt;IConnectionPool&lt;/b&gt;&#10;─────────────────────&#10;+ Borrow() → Handle&#10;+ Size: int" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="560" width="180" height="100" as="geometry"/>
+        </mxCell>
+
+        <!-- ConnectionPool -->
+        <mxCell id="pool" value="&lt;b&gt;ConnectionPool&lt;/b&gt;&#10;─────────────────────&#10;- idle: ConcurrentBag&#10;- semaphore: SemaphoreSlim&#10;- poolSize: int&#10;─────────────────────&#10;+ Borrow() → Handle (10s timeout)&#10;+ Dispose()&#10;- ApplyConnectionPragmas()&#10;  SET threads=1&#10;  preserve_insertion_order=false&#10;  enable_object_cache" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="30" y="700" width="230" height="200" as="geometry"/>
+        </mxCell>
+
+        <!-- IWriteSerializer -->
+        <mxCell id="iwriter" value="&lt;b&gt;«interface»&lt;/b&gt;&#10;&lt;b&gt;IWriteSerializer&lt;/b&gt;&#10;─────────────────────&#10;+ Submit(sql) → WriteResult" style="text;html=1;strokeColor=#d6b656;fillColor=#fff2cc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="560" y="560" width="200" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- WriteSerializer -->
+        <mxCell id="writer" value="&lt;b&gt;WriteSerializer&lt;/b&gt;&#10;─────────────────────&#10;- writerConnection&#10;- queue: Queue&#10;- writerThread: Thread&#10;- batchWindowMs: int (5)&#10;- batchMax: int (512)&#10;─────────────────────&#10;+ Submit(sql) → WriteResult&#10;- DrainLoop()&#10;- CollectBatch()&#10;- ExecuteBatch()&#10;- RunDmlTransaction()&#10;  1. MergeInserts()&#10;  2. BEGIN&#10;  3. Execute groups&#10;  4. COMMIT or ROLLBACK" style="text;html=1;strokeColor=#d6b656;fillColor=#fff2cc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="530" y="680" width="240" height="260" as="geometry"/>
+        </mxCell>
+
+        <!-- DatabaseManager -->
+        <mxCell id="dbmgr" value="&lt;b&gt;DatabaseManager&lt;/b&gt;&#10;─────────────────────&#10;- primaryConnection&#10;- connectionString&#10;─────────────────────&#10;+ CreateConnection()&#10;+ Dispose()&#10;&#10;:memory: → cache=shared&#10;file → direct path" style="text;html=1;strokeColor=#82b366;fillColor=#d5e8d4;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="300" y="720" width="190" height="160" as="geometry"/>
+        </mxCell>
+
+        <!-- ColumnBuilder -->
+        <mxCell id="colbuilder" value="&lt;b&gt;ColumnBuilder&lt;/b&gt;&#10;─────────────────────&#10;- type: ColumnType&#10;- int32s, int64s, floats...&#10;- nullIndices&#10;─────────────────────&#10;+ Add(value, rowIndex)&#10;+ Build() → ColumnData&#10;+ Reset()" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="460" width="200" height="150" as="geometry"/>
+        </mxCell>
+
+        <!-- InsertBatcher -->
+        <mxCell id="batcher" value="&lt;b&gt;InsertBatcher&lt;/b&gt;&#10;─────────────────────&#10;+ MergeInserts(stmts)&#10;  → List&lt;BatchGroup&gt;&#10;&#10;Merges:&#10;  INSERT INTO t VALUES (1)&#10;  INSERT INTO t VALUES (2)&#10;  →&#10;  INSERT INTO t VALUES (1),(2)" style="text;html=1;strokeColor=#d6b656;fillColor=#fff2cc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="820" y="700" width="230" height="160" as="geometry"/>
+        </mxCell>
+
+        <!-- DdlDetector -->
+        <mxCell id="ddl" value="&lt;b&gt;DdlDetector&lt;/b&gt;&#10;─────────────────────&#10;+ IsDdl(sql) → bool&#10;&#10;DDL keywords:&#10;CREATE, DROP, ALTER,&#10;TRUNCATE, VACUUM,&#10;PRAGMA, COPY..." style="text;html=1;strokeColor=#d6b656;fillColor=#fff2cc;align=left;verticalAlign=top;whiteSpace=wrap;overflow=auto;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="820" y="890" width="200" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrows -->
+        <mxCell id="a1" style="endArrow=open;endFill=0;" edge="1" source="server" target="sharded" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a2" style="endArrow=open;endFill=0;" edge="1" source="server" target="icache" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a3" style="endArrow=open;endFill=0;" edge="1" source="sharded" target="shard" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a4" style="endArrow=open;endFill=0;" edge="1" source="shard" target="ipool" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a5" style="endArrow=open;endFill=0;" edge="1" source="shard" target="iwriter" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a6" style="endArrow=block;endFill=0;dashed=1;" edge="1" source="pool" target="ipool" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a7" style="endArrow=block;endFill=0;dashed=1;" edge="1" source="writer" target="iwriter" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a8" style="endArrow=block;endFill=0;dashed=1;" edge="1" source="qcache" target="icache" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a9" style="endArrow=open;endFill=0;" edge="1" source="writer" target="batcher" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a10" style="endArrow=open;endFill=0;" edge="1" source="writer" target="ddl" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a11" style="endArrow=open;endFill=0;" edge="1" source="server" target="colbuilder" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="a12" style="endArrow=open;endFill=0;" edge="1" source="shard" target="dbmgr" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

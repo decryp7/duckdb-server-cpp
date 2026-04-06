@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-06T00:00:00.000Z" agent="DuckDB gRPC Server" version="21.0.0">
+  <diagram id="seq-write" name="Sequence: Execute (Write with Batching)">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="Sequence Diagram: Execute (Write Batching + INSERT Merging)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="700" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Lifelines -->
+        <mxCell id="t1" value="Thread A" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;size=40;" vertex="1" parent="1">
+          <mxGeometry x="50" y="50" width="80" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="t2" value="Thread B" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;size=40;" vertex="1" parent="1">
+          <mxGeometry x="180" y="50" width="80" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="t3" value="Thread C" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;size=40;" vertex="1" parent="1">
+          <mxGeometry x="310" y="50" width="80" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="ws" value="WriteSerializer&#10;(Background)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#fff2cc;strokeColor=#d6b656;size=40;" vertex="1" parent="1">
+          <mxGeometry x="480" y="50" width="120" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="ib" value="InsertBatcher" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#fff2cc;strokeColor=#d6b656;size=40;" vertex="1" parent="1">
+          <mxGeometry x="680" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="db" value="DuckDB" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#d5e8d4;strokeColor=#82b366;size=40;" vertex="1" parent="1">
+          <mxGeometry x="870" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+        <mxCell id="cache" value="QueryCache" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;container=0;collapsible=0;recursiveResize=0;fillColor=#f8cecc;strokeColor=#b85450;size=40;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="50" width="100" height="800" as="geometry"/>
+        </mxCell>
+
+        <!-- Concurrent submits -->
+        <mxCell id="s1" value="INSERT INTO t VALUES(1)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="90" y="120" as="sourcePoint"/>
+            <mxPoint x="540" y="120" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="s2" value="INSERT INTO t VALUES(2)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="220" y="145" as="sourcePoint"/>
+            <mxPoint x="540" y="145" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="s3" value="UPDATE t SET x=1" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="170" as="sourcePoint"/>
+            <mxPoint x="540" y="170" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Batch window -->
+        <mxCell id="note1" value="Collect batch&#10;(5ms window)" style="shape=note;whiteSpace=wrap;size=14;fillColor=#ffffcc;strokeColor=#999999;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="540" y="195" width="100" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Merge -->
+        <mxCell id="m1" value="MergeInserts()" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="260" as="sourcePoint"/>
+            <mxPoint x="730" y="260" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m2" value="Group 1: INSERT INTO t VALUES(1),(2)&#10;Group 2: UPDATE t SET x=1" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="730" y="310" as="sourcePoint"/>
+            <mxPoint x="540" y="310" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Transaction -->
+        <mxCell id="m3" value="BEGIN" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="360" as="sourcePoint"/>
+            <mxPoint x="920" y="360" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m4" value="INSERT INTO t VALUES(1),(2)" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="400" as="sourcePoint"/>
+            <mxPoint x="920" y="400" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m5" value="UPDATE t SET x=1" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="440" as="sourcePoint"/>
+            <mxPoint x="920" y="440" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m6" value="COMMIT" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="480" as="sourcePoint"/>
+            <mxPoint x="920" y="480" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m7" value="ok" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="920" y="510" as="sourcePoint"/>
+            <mxPoint x="540" y="510" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Cache invalidate -->
+        <mxCell id="m8" value="Invalidate()" style="html=1;verticalAlign=bottom;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="550" as="sourcePoint"/>
+            <mxPoint x="1100" y="550" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Signal callers -->
+        <mxCell id="r1" value="WriteResult(ok)" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="610" as="sourcePoint"/>
+            <mxPoint x="90" y="610" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r2" value="WriteResult(ok)" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="640" as="sourcePoint"/>
+            <mxPoint x="220" y="640" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r3" value="WriteResult(ok)" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endFill=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="540" y="670" as="sourcePoint"/>
+            <mxPoint x="350" y="670" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
