@@ -104,11 +104,16 @@ namespace DuckDbServer
                 var pool = new ConnectionPool(dbManager, readersPerShard);
                 var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
 
+                // Dedicated connection for BulkInsert Appender API (10-100x faster than SQL INSERT).
+                // Separate from writer to avoid blocking the WriteSerializer's background thread.
+                var bulkConn = dbManager.CreateConnection();
+
                 shards[i] = new Shard
                 {
                     DbManager = dbManager,
                     Pool = pool,
                     Writer = writer,
+                    BulkConnection = bulkConn,
                 };
             }
 
@@ -225,8 +230,12 @@ namespace DuckDbServer
             foreach (var shard in shards)
             {
                 // Dispose in dependency order: writer first (stops background thread),
-                // then pool (closes borrowed connections), then database manager.
+                // then bulk connection, then pool, then database manager.
                 shard.Writer.Dispose();
+                if (shard.BulkConnection != null)
+                {
+                    try { shard.BulkConnection.Dispose(); } catch { }
+                }
                 shard.Pool.Dispose();
                 shard.DbManager.Dispose();
             }
@@ -277,6 +286,17 @@ namespace DuckDbServer
 
             /// <summary>Thread-safe connection pool for read queries on this shard.</summary>
             public IConnectionPool Pool;
+
+            /// <summary>
+            /// Dedicated connection for DuckDB Appender API (BulkInsert).
+            /// Protected by BulkLock since DuckDB connections are not thread-safe.
+            /// Separate from the writer connection to avoid blocking the WriteSerializer.
+            /// DuckDB allows concurrent appends without conflicts.
+            /// </summary>
+            public DuckDB.NET.Data.DuckDBConnection BulkConnection;
+
+            /// <summary>Lock protecting BulkConnection access. Only one BulkInsert at a time per shard.</summary>
+            public readonly object BulkLock = new object();
 
             /// <summary>Write serializer that batches concurrent writes into transactions on this shard.</summary>
             public IWriteSerializer Writer;

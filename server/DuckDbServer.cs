@@ -448,53 +448,45 @@ namespace DuckDbServer
         // ── BulkInsert ───────────────────────────────────────────────────────
 
         /// <summary>
-        /// Handles a bulk insert request from a gRPC client. Converts the columnar
-        /// protobuf payload into a multi-row <c>INSERT INTO ... VALUES (...), (...)</c>
-        /// SQL statement and fans it out to all shards.
+        /// Handles a bulk insert request using DuckDB's Appender API for maximum performance.
         ///
-        /// <para><b>Why not use parameterized inserts?</b> DuckDB's ADO.NET provider does
-        /// not support batched parameterized inserts efficiently. A single multi-row INSERT
-        /// statement is parsed once by DuckDB and executes as a single operation, which is
-        /// significantly faster than N individual parameterized inserts.</para>
+        /// <para><b>Performance:</b> The Appender API bypasses the SQL parser, planner, and
+        /// optimizer entirely. It writes directly to DuckDB's columnar storage, achieving
+        /// 10-100x faster inserts compared to the SQL INSERT approach.</para>
         ///
-        /// <para><b>Gotcha:</b> String values are escaped by doubling single quotes
-        /// (<c>'</c> becomes <c>''</c>). This is standard SQL escaping but may not handle
-        /// all edge cases (e.g., backslash escaping in some SQL dialects). DuckDB uses
-        /// standard SQL escaping, so this is correct for DuckDB.</para>
+        /// <para><b>Thread safety:</b> Each shard has a dedicated BulkConnection protected by
+        /// a lock. DuckDB allows concurrent appends without conflicts, but the connection
+        /// itself is not thread-safe. The lock serializes BulkInsert calls per shard while
+        /// allowing concurrent inserts across different shards.</para>
+        ///
+        /// <para><b>Fan-out:</b> Data is appended to ALL shards (same write-all strategy as
+        /// Execute) to maintain data consistency across shards.</para>
         /// </summary>
-        /// <param name="request">
-        /// The bulk insert request containing the target table name, column metadata,
-        /// columnar data arrays, and the expected row count.
-        /// </param>
-        /// <param name="context">gRPC call context (unused).</param>
-        /// <returns>
-        /// A <see cref="BulkInsertResponse"/> indicating success with the number of rows
-        /// inserted, or failure with an error message.
-        /// </returns>
         public override Task<BulkInsertResponse> BulkInsert(
             BulkInsertRequest request, ServerCallContext context)
         {
             string table = request.Table;
             int rowCount = request.RowCount;
+            int colCount = request.Columns.Count;
 
-            // Validate required fields. All three must be present for a valid bulk insert.
-            if (string.IsNullOrEmpty(table) || rowCount == 0 || request.Columns.Count == 0)
+            if (string.IsNullOrEmpty(table) || rowCount == 0 || colCount == 0)
                 return Task.FromResult(new BulkInsertResponse
                     { Success = false, Error = "table, columns, and row_count are required" });
 
+            if (request.Data.Count != colCount)
+                return Task.FromResult(new BulkInsertResponse
+                    { Success = false, Error = "data column count does not match columns metadata" });
+
             try
             {
-                // Build the multi-row INSERT SQL from the columnar protobuf data.
-                // The builder handles type-specific formatting (booleans, numbers, strings)
-                // and NULL detection via the NullIndices list in each ColumnData.
-                string sql = BulkInsertSqlBuilder.Build(table, request.Columns, request.Data, rowCount);
-
-                // Fan out to all shards, same as Execute.
-                var result = shardedDb.WriteToAll(sql);
-                if (!result.Ok)
+                // Fan-out: append to ALL shards using the Appender API.
+                for (int s = 0; s < shardedDb.ShardCount; s++)
                 {
-                    Interlocked.Increment(ref errors);
-                    return Task.FromResult(new BulkInsertResponse { Success = false, Error = result.Error });
+                    var shard = shardedDb.GetShard(s);
+                    lock (shard.BulkLock)
+                    {
+                        AppendToShard(shard.BulkConnection, table, request, rowCount, colCount);
+                    }
                 }
 
                 queryCache.Invalidate();
@@ -507,6 +499,68 @@ namespace DuckDbServer
                 Interlocked.Increment(ref errors);
                 return Task.FromResult(new BulkInsertResponse { Success = false, Error = ex.Message });
             }
+        }
+
+        /// <summary>
+        /// Appends rows to a single shard using the DuckDB Appender API.
+        /// The Appender bypasses SQL parsing entirely — writes go directly to storage.
+        /// </summary>
+        private static void AppendToShard(
+            DuckDB.NET.Data.DuckDBConnection conn, string table,
+            BulkInsertRequest request, int rowCount, int colCount)
+        {
+            using (var appender = conn.CreateAppender(table))
+            {
+                for (int r = 0; r < rowCount; r++)
+                {
+                    var row = appender.CreateRow();
+                    for (int c = 0; c < colCount; c++)
+                    {
+                        var cd = request.Data[c];
+
+                        // Check null
+                        bool isNull = false;
+                        for (int n = 0; n < cd.NullIndices.Count; n++)
+                            if (cd.NullIndices[n] == r) { isNull = true; break; }
+
+                        if (isNull)
+                        {
+                            row.AppendValue((string)null);
+                            continue;
+                        }
+
+                        switch (request.Columns[c].Type)
+                        {
+                            case ColumnType.TypeBoolean:
+                                row.AppendValue(r < cd.BoolValues.Count && cd.BoolValues[r]);
+                                break;
+                            case ColumnType.TypeInt8:
+                            case ColumnType.TypeInt16:
+                            case ColumnType.TypeInt32:
+                            case ColumnType.TypeUint8:
+                            case ColumnType.TypeUint16:
+                                row.AppendValue(r < cd.Int32Values.Count ? cd.Int32Values[r] : 0);
+                                break;
+                            case ColumnType.TypeInt64:
+                            case ColumnType.TypeUint32:
+                            case ColumnType.TypeUint64:
+                                row.AppendValue(r < cd.Int64Values.Count ? cd.Int64Values[r] : 0L);
+                                break;
+                            case ColumnType.TypeFloat:
+                                row.AppendValue(r < cd.FloatValues.Count ? cd.FloatValues[r] : 0f);
+                                break;
+                            case ColumnType.TypeDouble:
+                            case ColumnType.TypeDecimal:
+                                row.AppendValue(r < cd.DoubleValues.Count ? cd.DoubleValues[r] : 0d);
+                                break;
+                            default:
+                                row.AppendValue(r < cd.StringValues.Count ? cd.StringValues[r] : "");
+                                break;
+                        }
+                    }
+                    row.EndRow();
+                }
+            } // appender.Dispose() flushes remaining rows
         }
 
         // ── Ping / GetStats ──────────────────────────────────────────────────
