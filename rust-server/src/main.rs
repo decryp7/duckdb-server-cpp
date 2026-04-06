@@ -71,6 +71,9 @@ struct Args {
     /// Query timeout in seconds (0 = no timeout)
     #[arg(long, default_value_t = 30)]
     timeout: u64,
+    /// Temp directory for DuckDB spill-to-disk
+    #[arg(long, default_value = "")]
+    temp_dir: String,
 }
 
 struct DuckDbServerImpl {
@@ -366,7 +369,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sharded_db = Arc::new(ShardedDuckDb::new(
         &args.db, shard_count, readers_per_shard,
-        args.batch_ms, args.batch_max,
+        args.batch_ms, args.batch_max, &args.temp_dir,
     )?);
 
     let query_cache = Arc::new(cache::QueryCache::new(10000, 60));

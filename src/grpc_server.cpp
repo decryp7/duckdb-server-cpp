@@ -541,7 +541,7 @@ grpc::Status DuckGrpcServer::Query(
         }
 
         // Iterate chunks using duckdb_fetch_chunk (auto-advances, returns nullptr at end)
-        duckdb::v1::QueryResponse response;
+        // Uses protobuf Arena allocation per chunk to reduce heap allocations.
         bool first_chunk = true;
         duckdb_data_chunk chunk;
 
@@ -558,12 +558,13 @@ grpc::Status DuckGrpcServer::Query(
                 continue;
             }
 
-            response.Clear();
-            response.set_row_count(static_cast<int>(rows_in_chunk));
+            google::protobuf::Arena chunk_arena;
+            auto* response = google::protobuf::Arena::CreateMessage<duckdb::v1::QueryResponse>(&chunk_arena);
+            response->set_row_count(static_cast<int>(rows_in_chunk));
 
             if (first_chunk) {
                 for (idx_t c = 0; c < col_count; ++c) {
-                    auto* meta = response.add_columns();
+                    auto* meta = response->add_columns();
                     meta->set_name(col_names[c]);
                     meta->set_type(col_types[c]);
                 }
@@ -571,26 +572,27 @@ grpc::Status DuckGrpcServer::Query(
             }
 
             for (idx_t c = 0; c < col_count; ++c) {
-                auto* cd = response.add_data();
+                auto* cd = response->add_data();
                 duckdb_vector vec = duckdb_data_chunk_get_vector(chunk, c);
                 fill_column_from_vector(vec, col_types[c], rows_in_chunk, cd);
             }
 
             duckdb_destroy_data_chunk(&chunk);
-            to_cache.push_back(response);
-            writer->Write(response);
+            to_cache.push_back(*response);  // copy out of arena for caching
+            writer->Write(*response);
         }
 
         if (first_chunk) {
-            response.Clear();
-            response.set_row_count(0);
+            google::protobuf::Arena empty_arena;
+            auto* response = google::protobuf::Arena::CreateMessage<duckdb::v1::QueryResponse>(&empty_arena);
+            response->set_row_count(0);
             for (idx_t c = 0; c < col_count; ++c) {
-                auto* meta = response.add_columns();
+                auto* meta = response->add_columns();
                 meta->set_name(col_names[c]);
                 meta->set_type(col_types[c]);
             }
-            to_cache.push_back(response);
-            writer->Write(response);
+            to_cache.push_back(*response);
+            writer->Write(*response);
         }
 
         // Cache for future hits

@@ -85,6 +85,9 @@ static void usage(const char* prog) {
         << "Write batching:\n"
         << "  --batch-ms  <ms>    Batch window             (default: 5)\n"
         << "  --batch-max <n>     Max writes per batch     (default: 512)\n\n"
+        << "Performance:\n"
+        << "  --memory-limit <sz> Per-shard memory limit   (default: auto 80%/shards)\n"
+        << "  --temp-dir   <path> DuckDB spill-to-disk dir (default: DuckDB default)\n\n"
         << "Other:\n"
         << "  --version           Print version and exit\n"
         << "  --help              Show this message\n\n"
@@ -136,8 +139,10 @@ int main(int argc, char* argv[]) {
         else if (a == "--batch-ms")  cfg.write_batch_ms   = parse_int(val, "--batch-ms");
         else if (a == "--batch-max") cfg.write_batch_max  = parse_pos(val, "--batch-max");
         else if (a == "--shards")    cfg.shards           = parse_int(val, "--shards");
-        else if (a == "--tls-cert")  cfg.tls_cert_path    = val;
-        else if (a == "--tls-key")   cfg.tls_key_path     = val;
+        else if (a == "--tls-cert")      cfg.tls_cert_path    = val;
+        else if (a == "--tls-key")       cfg.tls_key_path     = val;
+        else if (a == "--memory-limit")  cfg.memory_limit     = val;
+        else if (a == "--temp-dir")      cfg.temp_directory   = val;
         else { std::cerr << "Unknown option: " << a << "\n"; usage(argv[0]); return 1; }
     }
 
