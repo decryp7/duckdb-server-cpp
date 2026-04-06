@@ -26,3 +26,5 @@ benchmark/packages/
 # OS
 Thumbs.db
 .DS_Store
+rust-server/target/
+rust-server/Cargo.lock
