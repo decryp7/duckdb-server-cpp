@@ -9,20 +9,24 @@ name = "duckdb-grpc-server"
 path = "src/main.rs"
 
 [dependencies]
-# gRPC server
-tonic = "0.12"
-prost = "0.13"
-tokio = { version = "1", features = ["full"] }
+# ── gRPC framework ──────────────────────────────────────────────────────────
+tonic = "0.12"          # gRPC server/client framework built on hyper + tower
+prost = "0.13"          # Protobuf serialization (code-gen'd by tonic-build)
+tokio = { version = "1", features = ["full"] }  # Async runtime (multi-threaded scheduler)
 
-# DuckDB
+# ── DuckDB database ────────────────────────────────────────────────────────
 duckdb = { version = "1.1", features = ["bundled", "vtab-arrow"] }
+    # bundled: compiles DuckDB from source (no system install needed)
+    # vtab-arrow: enables query_arrow() for zero-copy columnar results
 arrow = { version = "53", default-features = false }
+    # Apache Arrow columnar format — used by duckdb::query_arrow()
+    # default-features=false avoids pulling in IPC/flight/parquet
 
-# Utilities
-clap = { version = "4", features = ["derive"] }
-crossbeam = "0.8"
-num_cpus = "1"
-tokio-stream = "0.1"
+# ── Utilities ───────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }   # CLI argument parsing with derive macros
+crossbeam = "0.8"       # Lock-free ArrayQueue for ConnectionPool (faster than Mutex<VecDeque>)
+num_cpus = "1"          # Detect hardware thread count for auto-sizing pool
+tokio-stream = "0.1"    # ReceiverStream adapter for tonic server-streaming RPCs
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build = "0.12"    # Protobuf/gRPC code generator (runs at cargo build time)

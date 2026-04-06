@@ -1,4 +1,33 @@
-//! Write serializer: batches concurrent DML into single transactions.
+//! # Write Serializer: Batches Concurrent DML into Single Transactions
+//!
+//! Serializes concurrent write requests through a single background thread
+//! that collects requests over a short time window and executes them in a
+//! single BEGIN...COMMIT transaction.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! Thread A: Submit("INSERT ...") ─┐
+//! Thread B: Submit("INSERT ...") ──┤── collected over batch_ms ──► BEGIN; A; B; COMMIT
+//! Thread C: Submit("UPDATE ...") ─┘
+//! ```
+//!
+//! Each caller blocks on a `mpsc::Receiver` until its write completes.
+//! Timeout is 30 seconds — if the writer thread dies, callers don't hang forever.
+//!
+//! ## from_conn(): Two try_clone() Calls
+//!
+//! The source connection is cloned twice:
+//! - `write_conn`: used by the background drain_loop for batched DML/DDL.
+//! - `bulk_conn`: used by the legacy bulk_insert method (now dead code since
+//!   BulkInsert routes through build_bulk_insert_sql + write_to_all).
+//!
+//! ## build_bulk_insert_sql(): Standalone Function
+//!
+//! Builds a multi-row INSERT SQL string from columnar protobuf data.
+//! Used by the BulkInsert RPC handler in main.rs to route through write_to_all()
+//! for thread-safe shard fan-out. Handles type dispatch, NULL values, and
+//! single-quote escaping for SQL string safety.
 
 use crate::proto::{ColumnData, ColumnMeta};
 use duckdb::Connection;

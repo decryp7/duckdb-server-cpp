@@ -1,15 +1,30 @@
 /**
  * @file grpc_server.cpp
- * @brief DuckGrpcServer — extreme performance implementation.
+ * @brief DuckGrpcServer — high-performance gRPC service for DuckDB.
  *
- * Optimizations:
- *   1. DuckDB Chunk API: direct pointer access (10-50x vs row accessors)
- *   2. memcpy bulk copy for non-null numeric columns (2-4x vs per-element loop)
- *   3. Streaming results: duckdb_execute_prepared_streaming (O(1) memory, 2-10x latency)
- *   4. response.Clear() reuse: avoids re-allocating protobuf buffers per chunk (20-40%)
- *   5. Reserved protobuf capacity (30-50% less re-alloc)
- *   6. IsCancelled check per chunk
- *   7. WriteLast for final chunk
+ * This file implements all five gRPC RPCs (Query, Execute, BulkInsert, Ping, GetStats)
+ * and the supporting infrastructure: sharded database management, columnar type conversion,
+ * and query caching.
+ *
+ * Architecture:
+ *   - N shards, each with its own DuckDB instance, connection pool, and write serializer.
+ *   - Reads: round-robin across shards via atomic counter.
+ *   - Writes: fan-out to ALL shards (every shard gets the same write).
+ *   - QueryCache: LRU with TTL, bypasses DuckDB entirely on cache hit (~0.1ms).
+ *
+ * Performance optimizations:
+ *   1. DuckDB Chunk API: direct pointer access to columnar buffers (10-50x vs row accessors).
+ *   2. memcpy bulk copy: for non-null numeric columns, copies entire column in one call (2-4x).
+ *   3. response.Clear() reuse: avoids re-allocating protobuf buffers per chunk (20-40%).
+ *   4. Reserved protobuf capacity: pre-allocates repeated fields to reduce reallocation (30-50%).
+ *   5. IsCancelled check: per chunk, avoids wasted work if client disconnects.
+ *   6. Per-type handling: UINT8/16/32 use correct sizeof (no buffer over-read).
+ *
+ * Thread safety:
+ *   - Query: borrows connection from pool (thread-safe), reads are concurrent.
+ *   - Execute/BulkInsert: routed through WriteSerializer (single writer thread per shard).
+ *   - QueryCache: mutex-protected, invalidated on every write.
+ *   - All stat counters are std::atomic.
  */
 
 #include "grpc_server.hpp"
@@ -22,15 +37,42 @@ namespace das {
 
 // ─── Construction / destruction ──────────────────────────────────────────────
 
+/**
+ * @brief Generate a file path for a specific shard index.
+ *
+ * For file-based databases, appends the shard index before the extension:
+ *   "data.duckdb" + shard 2 → "data_2.duckdb"
+ *   "analytics" + shard 0   → "analytics_0"
+ *
+ * For in-memory databases (empty string or ":memory:"), returns empty string
+ * which the caller interprets as nullptr → duckdb_open(nullptr) → in-memory.
+ *
+ * @param base   Original database path from config.
+ * @param idx    Shard index (0-based).
+ * @param count  Total number of shards. If 1, returns base unchanged.
+ * @return       Shard-specific path, or empty string for in-memory.
+ */
 static std::string shard_path(const std::string& base, int idx, int count) {
-    if (count <= 1) return base;
-    if (base.empty() || base == ":memory:") return "";
-    auto dot = base.rfind('.');
+    if (count <= 1) return base;        // Single shard — no suffix needed
+    if (base.empty() || base == ":memory:") return ""; // In-memory: each shard is independent
+    auto dot = base.rfind('.');         // Find extension separator
     if (dot != std::string::npos)
         return base.substr(0, dot) + "_" + std::to_string(idx) + base.substr(dot);
-    return base + "_" + std::to_string(idx);
+    return base + "_" + std::to_string(idx); // No extension: just append _N
 }
 
+/**
+ * @brief Construct the server: create N shards, each with pool + writer + tuning.
+ *
+ * Steps:
+ *   1. Auto-size reader pool if not specified (2× hardware threads).
+ *   2. For each shard: open DuckDB, create connection pool, create writer,
+ *      apply per-connection PRAGMAs (threads=1, etc.).
+ *   3. Writer connection gets PRAGMAs separately since it's not in the pool.
+ *
+ * @param cfg  Server configuration (db path, port, shards, pool size, etc.).
+ * @throws std::runtime_error if any shard fails to open.
+ */
 DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
     : cfg_(cfg)
 {
@@ -83,15 +125,37 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
               << "      db       = " << cfg_.db_path << "\n";
 }
 
+/** @brief Destroy all shards. Each Shard destructor disconnects and closes its DuckDB. */
 DuckGrpcServer::~DuckGrpcServer() {
     shards_.clear(); // Shard destructor handles cleanup
 }
 
+/**
+ * @brief Select the next shard for reading via atomic round-robin.
+ *
+ * Uses relaxed memory ordering since exact distribution doesn't matter —
+ * approximate round-robin is sufficient for load balancing.
+ * The modulo wraps naturally even when the counter overflows.
+ */
 Shard& DuckGrpcServer::next_for_read() {
     size_t idx = next_read_shard_.fetch_add(1, std::memory_order_relaxed);
     return *shards_[idx % shards_.size()];
 }
 
+/**
+ * @brief Fan-out a write to ALL shards (serial submission).
+ *
+ * Each shard's WriteSerializer batches the write with other concurrent writes.
+ * Serial submission is simpler than parallel and sufficient because each
+ * Submit() blocks only until the batch commits (~5ms window).
+ *
+ * Returns on first error — remaining shards may not receive the write,
+ * which can leave shards inconsistent. In practice, errors are rare
+ * (schema mismatch, constraint violation) and affect all shards equally.
+ *
+ * @param sql  SQL statement to execute on every shard.
+ * @return     WriteResult from the first shard, or first error encountered.
+ */
 WriteResult DuckGrpcServer::write_to_all(const std::string& sql) {
     if (shards_.size() == 1)
         return shards_[0]->writer->submit(sql);
@@ -113,6 +177,18 @@ ServerStats DuckGrpcServer::stats() const {
 
 // ─── Column type mapping ─────────────────────────────────────────────────────
 
+/**
+ * @brief Map a DuckDB native type to the protobuf ColumnType enum.
+ *
+ * Types not explicitly handled (INTERVAL, ENUM, MAP, LIST, STRUCT, etc.)
+ * fall through to TYPE_STRING — the server converts them to string representation.
+ *
+ * Type widening rules for the protobuf wire format:
+ *   TINYINT/SMALLINT/UTINYINT/USMALLINT → int32_values (widened to 4 bytes)
+ *   UINTEGER → int64_values (widened from 4 to 8 bytes)
+ *   UBIGINT  → int64_values (same 8 bytes, sign bit reinterpreted)
+ *   DECIMAL  → double_values (lossy for >15 significant digits)
+ */
 static duckdb::v1::ColumnType map_column_type(duckdb_type t) {
     switch (t) {
         case DUCKDB_TYPE_BOOLEAN:   return duckdb::v1::TYPE_BOOLEAN;
@@ -137,9 +213,33 @@ static duckdb::v1::ColumnType map_column_type(duckdb_type t) {
 }
 
 // ─── Fill column: memcpy fast path + per-element fallback ────────────────────
-// For non-null numeric columns: memcpy entire buffer in one call (2-4x faster).
-// For columns with nulls: per-element loop with validity check.
 
+/**
+ * @brief Convert a DuckDB column vector into a protobuf ColumnData message.
+ *
+ * This is the performance-critical inner loop of the Query handler.
+ * Two strategies are used depending on whether the column has NULL values:
+ *
+ * FAST PATH (no nulls): memcpy the entire column buffer in one call.
+ *   - Works for fixed-width types where DuckDB's internal layout matches
+ *     the protobuf packed array layout (INT32, INT64, FLOAT, DOUBLE).
+ *   - 2-4x faster than per-element copy.
+ *
+ * SLOW PATH (has nulls, or type requires widening): per-element loop.
+ *   - Checks validity bitmask for each row via duckdb_validity_row_is_valid().
+ *   - NULL rows get index added to null_indices and a placeholder zero value.
+ *   - Used for UINT8/16/32 (need widening), BOOLEAN, STRING, and any nullable column.
+ *
+ * DuckDB validity bitmask:
+ *   - duckdb_vector_get_validity() returns nullptr if ALL values are non-null.
+ *   - Otherwise returns a uint64_t* bitmask where bit N indicates row N's validity.
+ *   - duckdb_validity_row_is_valid(mask, row) checks the specific bit.
+ *
+ * @param vec        DuckDB vector from a data chunk.
+ * @param type       Protobuf column type (determines which packed array to populate).
+ * @param row_count  Number of rows in the chunk (from duckdb_data_chunk_get_size).
+ * @param cd         Output protobuf ColumnData to populate.
+ */
 static void fill_column_from_vector(
     duckdb_vector vec, duckdb::v1::ColumnType type,
     idx_t row_count, duckdb::v1::ColumnData* cd)
@@ -326,7 +426,12 @@ static void fill_column_from_vector(
         break;
     }
 
-    // ── STRING / fallback ────────────────────────────────────────────────
+    // ── STRING / fallback (also handles TIMESTAMP, DATE, TIME, BLOB) ───
+    // DuckDB string storage (duckdb_string_t) uses a union:
+    //   - Strings <= 12 bytes: stored inline in value.inlined.inlined[12]
+    //   - Strings > 12 bytes:  stored via pointer in value.pointer.ptr
+    // The length field is always in value.inlined.length (same offset in both).
+    // The threshold of 12 bytes is a DuckDB implementation constant.
     default: {
         duckdb_string_t* vals = static_cast<duckdb_string_t*>(data);
         cd->mutable_string_values()->Reserve(cap);
@@ -336,7 +441,7 @@ static void fill_column_from_vector(
                 cd->add_string_values("");
             } else {
                 idx_t len = vals[r].value.inlined.length;
-                if (len <= 12) {
+                if (len <= 12) { // 12 = DuckDB inline string threshold
                     cd->add_string_values(std::string(vals[r].value.inlined.inlined, len));
                 } else {
                     cd->add_string_values(std::string(vals[r].value.pointer.ptr, len));
@@ -351,6 +456,28 @@ static void fill_column_from_vector(
 
 // ─── Query: streaming + response reuse + chunk API + memcpy ──────────────────
 
+/**
+ * @brief Execute a SQL query and stream columnar results to the client.
+ *
+ * Flow:
+ *   1. Check QueryCache — return immediately on cache hit (~0.1ms).
+ *   2. Select shard via round-robin, borrow connection from pool.
+ *   3. Execute query via duckdb_query (non-streaming, materializes all chunks).
+ *   4. Iterate chunks via duckdb_fetch_chunk (returns nullptr at end).
+ *   5. For each chunk: build columnar QueryResponse, cache it, stream to client.
+ *   6. Store all responses in cache for future hits.
+ *   7. Return connection to pool (RAII Handle destructor).
+ *
+ * First chunk includes column metadata (names + types). Subsequent chunks
+ * include only row data to reduce wire overhead.
+ *
+ * Empty results (0 rows) still send one response with column metadata
+ * so the client knows the schema.
+ *
+ * Cancellation: checked per chunk via context->IsCancelled(). If client
+ * disconnects mid-stream, the chunk and result are cleaned up and CANCELLED
+ * status is returned. The connection is still returned to the pool.
+ */
 grpc::Status DuckGrpcServer::Query(
     grpc::ServerContext* context,
     const duckdb::v1::QueryRequest* request,
@@ -455,6 +582,16 @@ grpc::Status DuckGrpcServer::Query(
 
 // ─── Execute / Ping / GetStats ───────────────────────────────────────────────
 
+/**
+ * @brief Execute a DML/DDL statement (INSERT, UPDATE, DELETE, CREATE TABLE, etc.)
+ *
+ * Writes are fan-out to ALL shards via write_to_all(), which routes through
+ * each shard's WriteSerializer for batching and INSERT merging.
+ * Cache is fully invalidated after every successful write.
+ *
+ * Returns gRPC OK with success=false in the response body on DuckDB errors
+ * (not gRPC INTERNAL) so the client can distinguish transport errors from SQL errors.
+ */
 grpc::Status DuckGrpcServer::Execute(
     grpc::ServerContext*, const duckdb::v1::ExecuteRequest* request,
     duckdb::v1::ExecuteResponse* response)
@@ -501,6 +638,25 @@ grpc::Status DuckGrpcServer::GetStats(
 
 // ─── BulkInsert: build INSERT SQL and route through write_to_all ─────────────
 
+/**
+ * @brief Bulk insert columnar data by building a multi-row INSERT and routing
+ *        through write_to_all for thread-safe shard fan-out.
+ *
+ * Why SQL instead of Appender API:
+ *   The DuckDB Appender API (duckdb_appender_create) requires direct access to a
+ *   duckdb_connection. The WriteSerializer's background thread also uses its connection
+ *   concurrently. Since DuckDB connections are NOT thread-safe, using the Appender
+ *   directly would race with the writer thread. Building SQL and routing through
+ *   write_to_all() serializes access through the writer thread, avoiding the race.
+ *
+ * SQL construction:
+ *   Builds: INSERT INTO <table> VALUES (v1,v2,...), (v3,v4,...), ...
+ *   - Type dispatch per column: bool→true/false, int→to_string, float→to_string,
+ *     string→single-quote escaped ('O''Brien'), NULL→NULL literal.
+ *   - Single-quote escaping: ' → '' (SQL standard escape).
+ *
+ * After successful write, cache is fully invalidated.
+ */
 grpc::Status DuckGrpcServer::BulkInsert(
     grpc::ServerContext*,
     const duckdb::v1::BulkInsertRequest* request,

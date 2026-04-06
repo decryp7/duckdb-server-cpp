@@ -1,8 +1,15 @@
-//! Thread-safe LRU query result cache.
+//! # Thread-Safe Query Result Cache with TTL Expiration
 //!
-//! Caches protobuf QueryResponse objects keyed by SQL string.
-//! Cache hits bypass DuckDB entirely — near-zero latency.
-//! Writes invalidate the entire cache (simple but correct).
+//! Caches serialized protobuf `QueryResponse` vectors keyed by SQL string.
+//! Cache hits bypass DuckDB entirely — near-zero latency (~0.1ms).
+//!
+//! ## Design
+//!
+//! - **Mutex<HashMap>** (not RwLock): writes are frequent due to cache invalidation
+//!   on every Execute/BulkInsert. Mutex is simpler and lock hold time is short.
+//! - **Full invalidation on write**: any write clears entire cache. Simple and correct.
+//! - **Passive TTL eviction**: expired entries checked on get(), evicted on put() when full.
+//! - **Max 10K entries**: prevents unbounded memory growth.
 
 use crate::proto::QueryResponse;
 use std::collections::HashMap;

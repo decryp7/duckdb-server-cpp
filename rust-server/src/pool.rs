@@ -1,9 +1,32 @@
-//! DuckDB connection pool using Connection::try_clone().
+//! # DuckDB Connection Pool using `Connection::try_clone()`
 //!
-//! Opens the database ONCE, creates N connections via try_clone().
-//! Each cloned connection shares the same underlying database handle
-//! (internally calls duckdb_connect on the same duckdb_database).
-//! True concurrent reads — no mutex serialization.
+//! Fixed-size, lock-free connection pool for concurrent DuckDB read queries.
+//!
+//! ## Why try_clone() instead of Connection::open()?
+//!
+//! `Connection::open()` opens a new database file and acquires an exclusive lock.
+//! Calling it N times would fail with "database is locked" errors.
+//! `Connection::try_clone()` calls `duckdb_connect()` on the SAME underlying
+//! `duckdb_database` handle, creating N connections that share the same database.
+//!
+//! ## Data Structure: crossbeam ArrayQueue
+//!
+//! ArrayQueue is a bounded, lock-free, multi-producer/multi-consumer queue.
+//! It outperforms Mutex<VecDeque> under high contention because it uses
+//! atomic CAS operations instead of kernel-level locks.
+//!
+//! ## Borrow Strategy: spin + yield
+//!
+//! Fast path: pop from queue (lock-free, ~10ns).
+//! Slow path: spin with `thread::yield_now()` until a connection is returned
+//! or the 10-second deadline expires. yield_now() is `sched_yield()` on Linux
+//! which gives up the CPU time slice but doesn't sleep.
+//!
+//! ## Per-Connection PRAGMAs
+//!
+//! Every connection gets: SET threads=1, preserve_insertion_order=false,
+//! PRAGMA enable_object_cache, SET checkpoint_threshold='256MB'.
+//! These are per-connection settings in DuckDB — they must be applied to EACH connection.
 //!
 //! See: https://github.com/duckdb/duckdb-rs/issues/378
 

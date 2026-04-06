@@ -1,9 +1,24 @@
-//! Sharded DuckDB: read-all / write-all strategy.
+//! # Sharded DuckDB: Read-All / Write-All Strategy
 //!
-//! READ:  Round-robin across all shards (each has full data copy).
-//! WRITE: Fan-out to ALL shards in parallel (every shard gets same write).
+//! Manages N independent DuckDB instances for horizontal read scaling.
 //!
-//! N shards = N× read throughput, same write throughput.
+//! ## Strategy
+//!
+//! - **READ**: Round-robin across all shards via atomic counter. Each shard has a
+//!   full copy of the data, so any shard can serve any query. N shards = N× read throughput.
+//!
+//! - **WRITE**: Fan-out to ALL shards in parallel using `std::thread::scope`. Every shard
+//!   executes the same write, keeping data consistent. Write throughput = single shard speed.
+//!
+//! ## Shard Path Generation
+//!
+//! For file-based databases, each shard gets a unique file: `data_0.duckdb`, `data_1.duckdb`.
+//! For `:memory:` databases, each shard is an independent in-memory instance.
+//!
+//! ## Thread Safety
+//!
+//! `next_for_read()` uses `AtomicUsize` with relaxed ordering (exact distribution doesn't matter).
+//! `write_to_all()` uses scoped threads for parallel fan-out with automatic join.
 
 use crate::pool::ConnectionPool;
 use crate::writer::WriteSerializer;

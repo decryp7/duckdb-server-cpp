@@ -1,10 +1,31 @@
 /**
  * @file main_grpc.cpp
- * @brief Entry point for the DuckDB gRPC Server (custom protocol).
+ * @brief Entry point for the DuckDB gRPC Server (C++ edition).
  *
- * Uses proto/duckdb_service.proto.
- * Compatible with the C# client (DuckDbClient) and any client
- * generated from the same .proto file.
+ * Responsibilities:
+ *   1. Parse command-line arguments into ServerConfig.
+ *   2. Set up signal handlers for graceful shutdown (Ctrl+C / SIGTERM).
+ *   3. Create DuckGrpcServer (which creates shards, pools, writers).
+ *   4. Configure gRPC ServerBuilder with performance tuning options.
+ *   5. Start the gRPC server and block until shutdown.
+ *
+ * Uses proto/duckdb_service.proto — compatible with the C# client,
+ * Rust server, and any client generated from the same .proto file.
+ *
+ * Signal handling:
+ *   - Windows: SetConsoleCtrlHandler for CTRL_C, CTRL_BREAK, CTRL_CLOSE.
+ *   - Unix: std::signal for SIGINT and SIGTERM.
+ *   - Both call grpc::Server::Shutdown() which unblocks Wait().
+ *   - Unix handler uses write() instead of std::cout (async-signal-safe).
+ *
+ * gRPC tuning applied:
+ *   - NUM_CQS = hardware_concurrency (one completion queue per CPU core).
+ *   - MIN_POLLERS = 2, MAX_POLLERS = 2×cores (bounds polling thread count).
+ *   - Max message size = 64MB (default 4MB truncates large results).
+ *   - HTTP/2 write buffer = 2MB (batches small writes into larger frames).
+ *   - Keepalive = 30s interval, 10s timeout (detects dead connections).
+ *   - BDP probe enabled (auto-tunes TCP window based on bandwidth-delay product).
+ *   - Max concurrent streams = 200 (HTTP/2 multiplexing limit per connection).
  */
 
 #include "grpc_server.hpp"

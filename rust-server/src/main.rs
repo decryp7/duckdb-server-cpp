@@ -1,12 +1,31 @@
-//! DuckDB gRPC Server — Rust (maximum performance)
+//! # DuckDB gRPC Server — Rust Edition
 //!
-//! Optimizations applied:
-//!   1. query_arrow() — columnar zero-copy from DuckDB (3-10x vs row strings)
-//!   2. SET threads=1 — eliminates internal thread contention (2-5x concurrent)
-//!   3. HTTP/2 window sizes — 2MB stream / 4MB connection (2-5x streaming)
-//!   4. prepare_cached() — skip parse/plan on repeated queries (2-5x)
-//!   5. Channel buffer 32 — less producer blocking (~30% streaming)
-//!   6. Appender API — bulk inserts bypass SQL parser (10-100x writes)
+//! High-performance gRPC server exposing DuckDB over the custom columnar protocol
+//! defined in `proto/duckdb_service.proto`. Uses tonic for gRPC and the duckdb crate
+//! with `query_arrow()` for zero-copy columnar query results.
+//!
+//! ## Architecture
+//!
+//! - **ShardedDuckDb**: N independent DuckDB instances, round-robin reads, fan-out writes.
+//! - **ConnectionPool**: Fixed-size pool using `Connection::try_clone()` + crossbeam ArrayQueue.
+//! - **WriteSerializer**: Background thread batching concurrent writes into transactions.
+//! - **QueryCache**: Mutex<HashMap> with TTL expiration, invalidated on every write.
+//!
+//! ## Performance Optimizations
+//!
+//! 1. `query_arrow()` — columnar zero-copy from DuckDB (3-10x vs row-by-row strings)
+//! 2. `SET threads=1` per connection — eliminates internal thread contention (2-5x concurrent)
+//! 3. HTTP/2 window sizes — 2MB stream / 4MB connection (2-5x streaming throughput)
+//! 4. `prepare_cached()` — skip parse/plan on repeated queries (2-5x)
+//! 5. Channel buffer 32 — reduces producer blocking (~30% streaming improvement)
+//! 6. Per-connection PRAGMAs — preserve_insertion_order=false, object_cache, checkpoint 256MB
+//!
+//! ## Thread Safety
+//!
+//! - Query handlers run on tokio's thread pool via `spawn_blocking`.
+//! - Write handlers route through `ShardedDuckDb::write_to_all()` → `WriteSerializer::submit()`.
+//! - QueryCache uses `Mutex<HashMap>` (not RwLock — writes are frequent due to invalidation).
+//! - All stat counters are `Arc<AtomicI64>`.
 
 mod cache;
 mod pool;
