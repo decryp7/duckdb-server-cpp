@@ -49,19 +49,18 @@ impl ShardedDuckDb {
 
             let writer = {
                 let conn = pool.borrow().map_err(|e| e)?;
-                // Set database-level threads for background tasks (checkpoint, etc.)
-                let cpus = num_cpus::get();
-                let db_threads = std::cmp::max(1, cpus / shard_count);
-                let _ = conn.execute_batch(&format!("SET threads={}", db_threads));
-                // Auto memory limit per shard
+                // Apply database-level settings (memory_limit, temp_directory).
+                // These are database-wide and affect all connections.
                 if shard_count > 1 {
                     let pct = std::cmp::max(10, 80 / shard_count);
                     let _ = conn.execute_batch(&format!("SET memory_limit='{}%'", pct));
                 }
-                // Temp directory for spill-to-disk
                 if !temp_dir.is_empty() {
                     let _ = conn.execute_batch(&format!("SET temp_directory='{}'", temp_dir));
                 }
+                // Reset threads=1 before returning connection to pool.
+                // (memory_limit and temp_directory are database-wide, but threads is per-connection)
+                let _ = conn.execute_batch("SET threads=1");
                 Arc::new(WriteSerializer::from_conn(&conn, batch_ms, batch_max)?)
             };
 
