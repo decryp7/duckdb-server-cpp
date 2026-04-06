@@ -1,4 +1,4 @@
-# DuckDB gRPC Server  v5.0
+# DuckDB gRPC Server  v5.1
 
 Three server implementations (C#, C++, Rust) and a .NET 4.6.2 client.
 All use the same `proto/duckdb_service.proto` — fully interoperable.
@@ -85,6 +85,10 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | **INSERT merging** | N individual INSERTs → 1 multi-row INSERT |
 | **DDL detection** | CREATE/DROP run outside transactions automatically |
 | **DuckDB tuning** | threads=1, preserve_insertion_order=false, checkpoint 256MB |
+| **Memory limit/shard** | Auto-calculates per-shard limit to prevent OOM (80%/N) |
+| **Late materialization** | Extended to 1000 rows for faster LIMIT/pagination queries |
+| **Allocator flush** | 128MB threshold reduces OS memory return overhead |
+| **Protobuf Arena** | C++ uses Arena allocation for 40-60% fewer mallocs in Query |
 | **Server GC** | .NET server GC mode (1 thread per CPU core) |
 | **gRPC tuning** | 200 max streams, 2MB write buffer, keepalive |
 
@@ -101,8 +105,10 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | `--batch-ms` | `5` | Write batch window (ms) |
 | `--batch-max` | `512` | Max writes per batch |
 | `--batch-size` | `8192` | Rows per gRPC response |
-| `--memory-limit` | 80% RAM | DuckDB memory limit |
+| `--memory-limit` | auto | DuckDB memory limit (auto: 80%/shards) |
 | `--threads` | `1` | DuckDB threads per connection |
+| `--temp-dir` | — | Temp directory for DuckDB spill-to-disk |
+| `--timeout` | `30` | Query timeout (seconds, C# only) |
 
 ---
 
@@ -162,6 +168,7 @@ src/                             C++ implementation
 
 | Version | Summary |
 |---|---|
+| **v5.1** | Performance: auto memory_limit/shard, late materialization, allocator flush, Arena alloc (C++), temp_directory |
 | **v5.0** | Custom gRPC, no Arrow, sharding, caching, 3 server implementations |
 | v4.x | Arrow Flight (removed — .NET 4.6.2 incompatible) |
 | v3.x | IOCP server |

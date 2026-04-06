@@ -689,6 +689,17 @@ Row format (traditional):      Columnar format (this project):
 | `preserve_insertion_order=false` | Disabled | 1.5-3× faster scans without ORDER BY |
 | `enable_object_cache` | Enabled | Caches Parquet/table metadata |
 | `checkpoint_threshold` | 256MB | Reduces checkpoint frequency (default 16MB) |
+| `memory_limit` | auto: 80%/N shards | Prevents N shards each claiming 80% RAM → OOM |
+| `late_materialization_max_rows` | 1000 | Faster ORDER BY...LIMIT for pagination (default 50) |
+| `allocator_flush_threshold` | 128MB | Reduces OS memory return overhead |
+| `temp_directory` | configurable | Fast NVMe path for spill-to-disk |
+
+### C++ Protobuf Arena Allocation
+
+The C++ Query handler uses `google::protobuf::Arena` to allocate per-chunk
+`QueryResponse` messages. This reduces malloc/free overhead by 40-60% for
+large result sets with many chunks. The arena is created per-chunk and
+destroyed automatically when the chunk is done processing.
 
 ### gRPC Tuning
 
@@ -725,9 +736,10 @@ Row format (traditional):      Columnar format (this project):
 | `--batch-ms` | `5` | Write batch window (ms) |
 | `--batch-max` | `512` | Max writes per batch |
 | `--batch-size` | `8192` | Rows per streaming response |
-| `--memory-limit` | — | DuckDB memory limit (e.g. "8GB") |
+| `--memory-limit` | auto | DuckDB memory limit (auto: 80%/shards, or e.g. "8GB") |
 | `--threads` | `1` | DuckDB threads per connection |
-| `--timeout` | `30` | Query timeout (seconds) |
+| `--timeout` | `30` | Query timeout (seconds, C# only) |
+| `--temp-dir` | — | Temp directory for DuckDB spill-to-disk |
 | `--tls-cert` | — | TLS certificate PEM path |
 | `--tls-key` | — | TLS private key PEM path |
 
