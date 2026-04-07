@@ -47,6 +47,10 @@
     <Reference Include="DuckDB.NET.Data">
       <HintPath>..\packages\DuckDB.NET.Data.Full.1.1.1\lib\netstandard2.0\DuckDB.NET.Data.dll</HintPath>
     </Reference>
+    <Reference Include="DuckDB.NET.Bindings">
+      <HintPath>..\packages\DuckDB.NET.Bindings.Full.1.1.1\lib\netstandard2.0\DuckDB.NET.Bindings.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Numerics" />
     <Reference Include="System.Buffers">
       <HintPath>..\packages\System.Buffers.4.5.1\lib\netstandard2.0\System.Buffers.dll</HintPath>
     </Reference>
