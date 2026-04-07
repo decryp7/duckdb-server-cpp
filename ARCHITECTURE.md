@@ -747,15 +747,18 @@ destroyed automatically when the chunk is done processing.
 ### Recommended Production Configuration
 
 ```bash
-# High-throughput read-heavy workload (8-core machine)
---shards 8 --readers 128 --batch-ms 1 --batch-max 64 --memory-limit 8GB
+# RECOMMENDED: Single shard + large buffer pool (simplest, best write speed)
+--db data.duckdb --shards 1 --readers 16 --memory-limit 12GB --batch-ms 1
 
-# Hybrid mode: durable file backup + fast memory reads (5-10x)
+# High concurrency (50+ readers): add shards to reduce DuckDB lock contention
+--db data.duckdb --shards 4 --readers 64 --memory-limit 12GB --batch-ms 1
+
+# Hybrid mode (advanced): data exceeds RAM or write latency critical
 --backup-db data.duckdb --shards 4 --readers 64 --memory-limit 8GB
 
-# Write-heavy workload
---shards 2 --readers 32 --batch-ms 5 --batch-max 512
+# Write-heavy workload: always single shard (minimizes fsync)
+--db data.duckdb --shards 1 --readers 16 --batch-ms 5 --batch-max 512
 
-# Single-user development
---shards 1 --readers 4
+# Development
+--db :memory: --shards 1 --readers 4
 ```

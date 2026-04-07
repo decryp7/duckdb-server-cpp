@@ -132,43 +132,73 @@ With 4 shards: each gets 20% of RAM. With 1 shard: uses DuckDB default (80%).
 
 ---
 
-## Sharding: Read vs Write Trade-off
+## Sharding: When It Helps and When It Hurts
 
-### How It Works
+> **Default recommendation: `--shards 1`** for most workloads.
+> Sharding only helps at 20+ concurrent readers where DuckDB's internal
+> locks become the bottleneck. Below that, a single shard with a large
+> buffer pool and connection pool is simpler and faster.
+
+### What Sharding Does
 
 ```
-N shards = N independent DuckDB instances
+Single shard (--shards 1):
+  All queries → 1 DuckDB instance → share internal locks (catalog, buffer mgr)
+  Pool of N connections provides parallelism, but locks can contend at high concurrency
 
-READS:  Round-robin across shards → N× read throughput
-WRITES: Fan-out to ALL shards → same write throughput as 1 shard
+4 shards (--shards 4):
+  Query 1 → DuckDB instance 0  (no lock contention with other instances)
+  Query 2 → DuckDB instance 1  (fully independent)
+  Each instance has its own catalog, buffer pool, and transaction manager
+```
+
+### When Sharding Helps
+
+Sharding helps **only when DuckDB's internal locks are the bottleneck** — at
+high concurrency (20+ concurrent queries). DuckDB's internal locks include:
+- Catalog lock (table metadata lookups)
+- Buffer manager lock (page cache eviction)
+- Transaction manager (MVCC bookkeeping)
+
+### When Sharding Does NOT Help (or Hurts)
+
+| Scenario | Why |
+|----------|-----|
+| Low concurrency (1-20 queries) | No lock contention — 1 shard is fine |
+| CPU-bound queries (complex joins) | Bottleneck is computation, not locks |
+| Write-heavy (file DB) | **Sharding HURTS** — N × fsync per write |
+| Large buffer pool + small data | Single shard caches everything — no benefit |
+
+### The Cost of Sharding
+
+| Cost | Impact |
+|------|--------|
+| N × memory | Each shard has its own buffer pool + metadata |
+| N × write latency | Every write fans out to ALL shards (N × fsync for file DB) |
+| N × data duplication | Same data stored N times across shards |
+| Complexity | More failure modes, harder to debug |
+
+### Sharding Recommendations
+
+```
+Concurrent readers < 20:   --shards 1  (simplest, no overhead)
+Concurrent readers 20-100: --shards 2-4 (moderate scaling)
+Concurrent readers 100+:   --shards 4-8 (max scaling, memory shards only)
+
+Write-heavy workload:      --shards 1  (always — minimize fsync)
 ```
 
 ### The File DB Write Problem
 
-Each `COMMIT` on a file-based database triggers `fsync()` to the WAL file for
-durability. With N shards on the same physical disk, N fsyncs serialize at the
-I/O layer:
+Each `COMMIT` triggers `fsync()`. With N shards, that's N × fsync:
 
 ```
 1 shard:  1 × fsync = ~5ms (SSD) or ~50ms (HDD)
-4 shards: 4 × fsync = ~20ms (SSD) or ~200ms (HDD)
-8 shards: 8 × fsync = ~40ms (SSD) or ~400ms (HDD)
+4 shards: 4 × fsync = ~20ms (SSD) or ~200ms (HDD)  ← 4x slower writes
+8 shards: 8 × fsync = ~40ms (SSD) or ~400ms (HDD)  ← 8x slower writes
 ```
 
-**Rule of thumb:**
-- **In-memory database**: Use many shards (4-8). No fsync, no I/O contention.
-- **File database on SSD**: Use 2-4 shards. Moderate fsync overhead.
-- **File database on HDD**: Use 1-2 shards. fsync dominates write latency.
-
-### Benchmark Reference
-
-| Config | Single Write | 10× Concurrent Writes | Read (10×) |
-|--------|-------------|----------------------|------------|
-| 1 shard, memory | ~2ms | ~5ms (200 ops/s) | ~2ms (5000 ops/s) |
-| 4 shards, memory | ~3ms | ~5ms (200 ops/s) | ~1ms (10000 ops/s) |
-| 1 shard, file SSD | ~8ms | ~15ms (70 ops/s) | ~3ms (3000 ops/s) |
-| 4 shards, file SSD | ~25ms | ~30ms (40 ops/s) | ~1ms (8000 ops/s) |
-| 8 shards, file HDD | ~500ms | ~220ms (40 ops/s) | ~2ms (3500 ops/s) |
+**This is why `--shards 1` is the default for file databases.**
 
 ---
 
@@ -469,16 +499,20 @@ Hybrid mode's real advantages over buffer pool:
 ### Configuration Examples
 
 ```bash
-# RECOMMENDED: Persistent data that fits in RAM — just use large buffer pool
+# RECOMMENDED: Persistent data — single shard + large buffer pool
+# Simplest, fastest writes, buffer pool caches all data in RAM
+--db data.duckdb --shards 1 --readers 16 --memory-limit 12GB --batch-ms 1
+
+# High concurrency reads (50+ concurrent) — add shards for lock reduction
 --db data.duckdb --shards 4 --readers 64 --memory-limit 12GB --batch-ms 1
 
 # Read-heavy analytics (no persistence needed)
---db :memory: --shards 8 --readers 128 --batch-ms 1 --batch-max 64
+--db :memory: --shards 4 --readers 64 --batch-ms 1 --batch-max 64
 
-# Write-heavy (event ingestion, ETL) — minimize fsync
---db data.duckdb --shards 2 --readers 32 --batch-ms 5 --batch-max 512
+# Write-heavy (event ingestion, ETL) — always single shard
+--db data.duckdb --shards 1 --readers 16 --batch-ms 5 --batch-max 512
 
-# Hybrid: data exceeds RAM or write latency is critical
+# Hybrid: data exceeds RAM or write latency critical (advanced)
 --backup-db data.duckdb --shards 4 --readers 64 --memory-limit 8GB
 
 # Development (single user)
