@@ -343,6 +343,7 @@ namespace DuckDbServer
                     case "--temp-dir":     config.TempDirectory = value; break;
                     case "--tls-cert":     config.TlsCertPath = value; break;
                     case "--tls-key":   config.TlsKeyPath = value; break;
+                    case "--backup-db": config.BackupDbPath = value; break;
                     default:
                         Console.Error.WriteLine("Unknown option: " + arg);
                         PrintUsage();

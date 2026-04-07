@@ -57,6 +57,12 @@ namespace DuckDbServer
         /// </summary>
         private long nextReadShard;
 
+        /// <summary>
+        /// Index of the first shard eligible for reads. 0 in normal mode, 1 in hybrid mode
+        /// (skips the file-based backup shard at index 0).
+        /// </summary>
+        private readonly int readStartIndex;
+
         /// <summary>Number of shards (always >= 1).</summary>
         public int ShardCount { get { return shards.Length; } }
 
@@ -86,22 +92,32 @@ namespace DuckDbServer
         /// </remarks>
         public ShardedDuckDb(ServerConfig config)
         {
-            int shardCount = Math.Max(1, config.Shards);
-            // Divide total readers evenly across shards. Integer division may drop remainder.
-            int readersPerShard = Math.Max(1, config.ReaderPoolSize / shardCount);
+            bool hybridMode = !string.IsNullOrEmpty(config.BackupDbPath);
+            int memoryShardCount = Math.Max(1, config.Shards);
+            int totalShardCount = hybridMode ? memoryShardCount + 1 : memoryShardCount;
+            readStartIndex = hybridMode ? 1 : 0;
+            int readableShards = hybridMode ? memoryShardCount : totalShardCount;
+            int readersPerShard = Math.Max(1, config.ReaderPoolSize / readableShards);
 
-            shards = new Shard[shardCount];
+            shards = new Shard[totalShardCount];
             nextReadShard = -1; // Pre-decrement so first Increment yields 0.
 
-            for (int i = 0; i < shardCount; i++)
+            for (int i = 0; i < totalShardCount; i++)
             {
-                // Compute the database path for this shard (e.g., "data_0.db", "data_1.db").
-                string dbPath = GetShardPath(config.DbPath, i, shardCount);
+                string dbPath;
+                if (hybridMode && i == 0)
+                    dbPath = config.BackupDbPath; // File DB for durability
+                else if (hybridMode)
+                    dbPath = ":memory:"; // Memory DB for speed
+                else
+                    dbPath = GetShardPath(config.DbPath, i, totalShardCount);
 
                 // Each shard gets its own DatabaseManager (owns the primary DuckDB connection),
                 // ConnectionPool (for read parallelism), and WriteSerializer (for batched writes).
-                var dbManager = new DatabaseManager(dbPath, config, shardCount);
-                var pool = new ConnectionPool(dbManager, readersPerShard);
+                var dbManager = new DatabaseManager(dbPath, config, totalShardCount);
+                // File shard (index 0 in hybrid) gets minimal readers since it's write-only
+                int poolSize = (hybridMode && i == 0) ? 1 : readersPerShard;
+                var pool = new ConnectionPool(dbManager, poolSize);
                 var writer = new WriteSerializer(dbManager, config.WriteBatchMs, config.WriteBatchMax);
 
                 // Dedicated connection for BulkInsert Appender API (10-100x faster than SQL INSERT).
@@ -117,12 +133,18 @@ namespace DuckDbServer
                 };
             }
 
-            TotalPoolSize = readersPerShard * shardCount;
+            TotalPoolSize = readersPerShard * readableShards;
 
-            Console.WriteLine("[das] Sharded DuckDB (read-all / write-all):");
-            Console.WriteLine("      shards   = {0}", shardCount);
-            Console.WriteLine("      readers  = {0} per shard, {1} total", readersPerShard, TotalPoolSize);
-            Console.WriteLine("      strategy = reads round-robin, writes fan-out to all");
+            // Hybrid mode: sync existing tables from file DB to memory shards
+            if (hybridMode)
+            {
+                SyncFileToMemory(config.BackupDbPath);
+                Console.WriteLine("[das] Hybrid mode: file backup at " + config.BackupDbPath);
+            }
+
+            Console.WriteLine("[das] Sharded DuckDB ({0}):", hybridMode ? "hybrid: file backup + memory shards" : "read-all / write-all");
+            Console.WriteLine("      total shards = {0} ({1})", totalShardCount, hybridMode ? "1 file + " + memoryShardCount + " memory" : "all " + totalShardCount);
+            Console.WriteLine("      readers      = {0} per shard, {1} total", readersPerShard, TotalPoolSize);
         }
 
         /// <summary>
@@ -142,8 +164,9 @@ namespace DuckDbServer
         public Shard NextForRead()
         {
             long idx = Interlocked.Increment(ref nextReadShard);
-            // Mask sign bit to handle long overflow, then modulo for shard selection.
-            return shards[(int)((idx & 0x7FFFFFFFFFFFFFFFL) % shards.Length)];
+            int readableCount = shards.Length - readStartIndex;
+            int shardIdx = readStartIndex + (int)((idx & 0x7FFFFFFFFFFFFFFFL) % readableCount);
+            return shards[shardIdx];
         }
 
         /// <summary>
@@ -292,6 +315,67 @@ namespace DuckDbServer
                 shard.Pool.Dispose();
                 shard.DbManager.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Syncs existing tables from the file-based backup DB (shard 0) to all memory shards.
+        /// Uses DuckDB's ATTACH to read from the file DB and CREATE TABLE AS SELECT to copy data.
+        /// Called once during construction in hybrid mode.
+        /// </summary>
+        /// <param name="filePath">Path to the file-based DuckDB.</param>
+        private void SyncFileToMemory(string filePath)
+        {
+            // Get list of tables from file DB (shard 0)
+            var tables = new System.Collections.Generic.List<string>();
+            using (var handle = shards[0].Pool.Borrow())
+            using (var cmd = handle.Connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT table_name FROM information_schema.tables WHERE table_schema='main'";
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                        tables.Add(reader.GetString(0));
+                }
+            }
+
+            if (tables.Count == 0)
+            {
+                Console.WriteLine("[das] Hybrid sync: no tables in file DB (fresh start)");
+                return;
+            }
+
+            Console.WriteLine("[das] Hybrid sync: copying {0} tables from file DB to {1} memory shards...", tables.Count, shards.Length - 1);
+
+            // For each memory shard, ATTACH the file DB and copy each table
+            for (int s = 1; s < shards.Length; s++)
+            {
+                using (var handle = shards[s].Pool.Borrow())
+                using (var cmd = handle.Connection.CreateCommand())
+                {
+                    // Attach the file DB as a read-only source
+                    cmd.CommandText = "ATTACH '" + filePath.Replace("'", "''") + "' AS backup_src (READ_ONLY)";
+                    cmd.ExecuteNonQuery();
+
+                    foreach (var table in tables)
+                    {
+                        try
+                        {
+                            // Create table with same schema and copy data
+                            cmd.CommandText = "CREATE TABLE IF NOT EXISTS \"" + table.Replace("\"", "\"\"") + "\" AS SELECT * FROM backup_src.\"" + table.Replace("\"", "\"\"") + "\"";
+                            cmd.ExecuteNonQuery();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine("[das] Hybrid sync: failed to copy table '" + table + "' to shard " + s + ": " + ex.Message);
+                        }
+                    }
+
+                    cmd.CommandText = "DETACH backup_src";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            Console.WriteLine("[das] Hybrid sync: complete");
         }
 
         /// <summary>

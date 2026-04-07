@@ -198,6 +198,15 @@ namespace DuckDbServer
         /// </summary>
         public int QueryTimeoutSeconds { get; set; } = 30;
 
+        /// <summary>
+        /// Path to a durable file-based DuckDB for hybrid mode.
+        /// When set, shard 0 is a file DB (write-only backup) and all other
+        /// shards are in-memory (fast reads). Reads never touch the file DB.
+        /// Empty = all shards use --db path (original behavior).
+        /// CLI flag: --backup-db
+        /// </summary>
+        public string BackupDbPath { get; set; } = "";
+
         /// <summary>Path to temp directory for DuckDB spill-to-disk. Empty = DuckDB default.</summary>
         public string TempDirectory { get; set; } = "";
 
