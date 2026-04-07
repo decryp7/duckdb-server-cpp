@@ -166,11 +166,12 @@ namespace DuckDbServer
             }
             finally
             {
-                // Dispose in reverse construction order. Handles partial construction
-                // (if ShardedDuckDb was created but DuckDbServer was not).
                 // DuckDbServer.Dispose() disposes shardedDb internally.
-                // Do NOT dispose shardedDb separately -- that would cause double-dispose.
-                duckDbServer?.Dispose();
+                // If DuckDbServer was never created (constructor threw), dispose shardedDb directly.
+                if (duckDbServer != null)
+                    duckDbServer.Dispose();
+                else if (shardedDb != null)
+                    shardedDb.Dispose();
             }
 
             return 0;

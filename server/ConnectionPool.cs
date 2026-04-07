@@ -270,30 +270,24 @@ namespace DuckDbServer
         /// <param name="conn">The newly created connection to configure.</param>
         private static void ApplyConnectionPragmas(DuckDBConnection conn)
         {
+            // Each PRAGMA is wrapped individually so failure of one doesn't skip the rest.
+            TryPragma(conn, "SET threads=1");
+            TryPragma(conn, "SET preserve_insertion_order=false");
+            TryPragma(conn, "PRAGMA enable_object_cache");
+            TryPragma(conn, "SET late_materialization_max_rows=1000");
+        }
+
+        private static void TryPragma(DuckDBConnection conn, string sql)
+        {
             try
             {
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SET threads=1";
-                    cmd.ExecuteNonQuery();
-                }
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SET preserve_insertion_order=false";
-                    cmd.ExecuteNonQuery();
-                }
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "PRAGMA enable_object_cache";
-                    cmd.ExecuteNonQuery();
-                }
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SET late_materialization_max_rows=1000";
+                    cmd.CommandText = sql;
                     cmd.ExecuteNonQuery();
                 }
             }
-            catch { /* best-effort -- PRAGMAs are optimization hints, not requirements */ }
+            catch { /* best-effort — PRAGMAs are optimization hints, not requirements */ }
         }
 
         /// <summary>

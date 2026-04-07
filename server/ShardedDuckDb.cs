@@ -260,17 +260,6 @@ namespace DuckDbServer
             return WriteResult.Success();
         }
 
-        /// <summary>
-        /// Executes a write on ALL shards using pre-built SQL. This is a convenience
-        /// alias for <see cref="WriteToAll"/> used by the BulkInsert handler where the
-        /// SQL has already been constructed by <see cref="BulkInsertSqlBuilder"/>.
-        /// </summary>
-        /// <param name="sql">Pre-built INSERT SQL statement.</param>
-        /// <returns>The result from <see cref="WriteToAll"/>.</returns>
-        public WriteResult WriteToAllRaw(string sql)
-        {
-            return WriteToAll(sql);
-        }
 
         /// <summary>
         /// Retrieves a specific shard by index. The index is taken modulo shard count,

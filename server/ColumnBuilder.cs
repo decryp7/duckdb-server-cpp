@@ -122,6 +122,11 @@ namespace DuckDbServer
                 case ColumnType.TypeUint64:
                     // All large integer types use int64 for protobuf transport.
                     int64s.Add(Convert.ToInt64(value)); break;
+                case ColumnType.TypeBlob:
+                    // BLOB values stored as base64 string since ColumnBuilder uses string list.
+                    // The proto has blob_values (bytes) but we encode as string for simplicity.
+                    strings.Add(value is byte[] bytes ? System.Convert.ToBase64String(bytes) : value.ToString());
+                    break;
                 case ColumnType.TypeFloat:
                     floats.Add(Convert.ToSingle(value)); break;
                 case ColumnType.TypeDouble:
