@@ -6,7 +6,7 @@ REM  Runs performance tests against a running DuckDB gRPC server.
 REM
 REM  Prerequisites:
 REM    1. Start the server first: run_server.bat
-REM    2. The server must be listening on localhost:17777
+REM    2. The server must be listening on localhost:19100
 REM
 REM  Modes:
 REM    --quick    Fast smoke test (4 scenarios, ~30 seconds)

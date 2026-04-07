@@ -67,8 +67,8 @@ namespace DuckDbClient
         /// credentials. Suitable for localhost or VPN-protected networks.
         /// </summary>
         /// <param name="host">Server hostname or IP address. Default: "localhost".</param>
-        /// <param name="port">Server gRPC port. Default: 17777.</param>
-        public DuckDbClient(string host = "localhost", int port = 17777)
+        /// <param name="port">Server gRPC port. Default: 19100.</param>
+        public DuckDbClient(string host = "localhost", int port = 19100)
             : this(new Channel(host + ":" + port, ChannelCredentials.Insecure, HighPerfOptions)) { }
 
         /// <summary>

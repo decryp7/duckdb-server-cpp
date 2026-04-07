@@ -56,7 +56,7 @@ struct Args {
     db: String,
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
-    #[arg(long, default_value_t = 17777)]
+    #[arg(long, default_value_t = 19100)]
     port: u16,
     #[arg(long, default_value_t = 0)]
     readers: usize,

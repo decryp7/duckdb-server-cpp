@@ -12,8 +12,8 @@ namespace DuckDbClient
     /// DataTable binding, write operations, server statistics, concurrent queries, and
     /// dependency injection patterns.
     ///
-    /// <para><b>Prerequisites:</b> A DuckDB gRPC server must be running on localhost:17777.
-    /// Start the server with: <c>DuckDbServer.exe --db :memory: --port 17777</c></para>
+    /// <para><b>Prerequisites:</b> A DuckDB gRPC server must be running on localhost:19100.
+    /// Start the server with: <c>DuckDbServer.exe --db :memory: --port 19100</c></para>
     ///
     /// <para><b>Error handling:</b> Each example is wrapped in a try/catch by
     /// <see cref="RunExample"/>. If the server is not running, examples are skipped
@@ -26,7 +26,7 @@ namespace DuckDbClient
         /// <summary>
         /// Demonstrates a basic query with health check. Shows how to:
         /// <list type="bullet">
-        ///   <item><description>Create a client connected to localhost:17777.</description></item>
+        ///   <item><description>Create a client connected to localhost:19100.</description></item>
         ///   <item><description>Verify server connectivity with <see cref="IDuckDbClient.Ping"/>.</description></item>
         ///   <item><description>Execute a SELECT query and iterate over rows.</description></item>
         ///   <item><description>Access column values by name from the row dictionary.</description></item>
@@ -35,7 +35,7 @@ namespace DuckDbClient
         public static void BasicQuery()
         {
             // Create a client. The using block ensures the gRPC channel is shut down.
-            using (IDuckDbClient client = new DuckDbClient("localhost", 17777))
+            using (IDuckDbClient client = new DuckDbClient("localhost", 19100))
             {
                 // Verify the server is reachable before executing queries.
                 client.Ping();
@@ -62,7 +62,7 @@ namespace DuckDbClient
         /// </summary>
         public static void DataTableBinding()
         {
-            // Default constructor connects to localhost:17777.
+            // Default constructor connects to localhost:19100.
             using (IDuckDbClient client = new DuckDbClient())
             {
                 using (IQueryResult result = client.Query(
@@ -172,7 +172,7 @@ namespace DuckDbClient
         /// </summary>
         public static void DependencyInjectionPattern()
         {
-            using (IDuckDbClient client = new DuckDbClient("localhost", 17777))
+            using (IDuckDbClient client = new DuckDbClient("localhost", 19100))
             {
                 // Inject the client into a service class via constructor injection.
                 var service = new SalesReportService(client);

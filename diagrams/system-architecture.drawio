@@ -26,7 +26,7 @@
         </mxCell>
 
         <!-- gRPC Transport -->
-        <mxCell id="grpc" value="gRPC / HTTP/2&#10;proto/duckdb_service.proto  |  Port 17777&#10;Query (streaming) | Execute | BulkInsert | Ping | GetStats" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="grpc" value="gRPC / HTTP/2&#10;proto/duckdb_service.proto  |  Port 19100&#10;Query (streaming) | Execute | BulkInsert | Ping | GetStats" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="350" y="200" width="600" height="60" as="geometry"/>
         </mxCell>
 

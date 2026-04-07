@@ -65,7 +65,7 @@ struct ServerConfig {
     std::string host = "0.0.0.0";
 
     /// TCP port for the gRPC listener.
-    int port = 17777;
+    int port = 19100;
 
     /// Total number of read connections across all shards.  0 means
     /// auto-detect: 2 * hardware_concurrency (or 8 if detection fails).

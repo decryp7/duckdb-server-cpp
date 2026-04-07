@@ -9,7 +9,7 @@ namespace DuckDbBenchmark
         static int Main(string[] args)
         {
             string host = "localhost";
-            int port = 17777;
+            int port = 19100;
             bool quick = false;
             bool full = false;
 
@@ -348,7 +348,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("Usage: DuckDbBenchmark.exe [options]");
             Console.WriteLine();
             Console.WriteLine("  --host <addr>   Server address (default: localhost)");
-            Console.WriteLine("  --port <n>      Server port (default: 17777)");
+            Console.WriteLine("  --port <n>      Server port (default: 19100)");
             Console.WriteLine("  --quick         Fast smoke test (4 scenarios, ~30s)");
             Console.WriteLine("  --full          Full suite + max concurrency + sustained (~15min)");
             Console.WriteLine("  --help          Show this message");

@@ -21,7 +21,7 @@ echo.
 
 rust-server\target\release\duckdb-grpc-server.exe ^
     --db data.duckdb ^
-    --port 17777 ^
+    --port 19100 ^
     --shards 8 ^
     --readers 128 ^
     --batch-ms 1 ^

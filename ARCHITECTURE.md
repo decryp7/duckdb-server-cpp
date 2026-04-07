@@ -83,7 +83,7 @@ graph TB
     end
 
     subgraph "Transport Layer"
-        GRPC[gRPC / HTTP/2<br/>proto/duckdb_service.proto<br/>Port 17777]
+        GRPC[gRPC / HTTP/2<br/>proto/duckdb_service.proto<br/>Port 19100]
     end
 
     subgraph "Server Layer"
@@ -730,7 +730,7 @@ destroyed automatically when the chunk is done processing.
 |------|---------|-------------|
 | `--db` | `:memory:` | DuckDB file path or `:memory:` |
 | `--host` | `0.0.0.0` | Bind address |
-| `--port` | `17777` | gRPC listen port |
+| `--port` | `19100` | gRPC listen port |
 | `--shards` | `1` | Number of DuckDB instances |
 | `--readers` | `nCPU×2` | Total read connection pool |
 | `--batch-ms` | `5` | Write batch window (ms) |

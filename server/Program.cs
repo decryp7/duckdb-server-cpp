@@ -403,7 +403,7 @@ namespace DuckDbServer
             Console.WriteLine();
             Console.WriteLine("Network:");
             Console.WriteLine("  --host     <addr>   Bind address             (default: 0.0.0.0)");
-            Console.WriteLine("  --port     <n>      gRPC port                (default: 17777)");
+            Console.WriteLine("  --port     <n>      gRPC port                (default: 19100)");
             Console.WriteLine("  --tls-cert <path>   TLS certificate PEM");
             Console.WriteLine("  --tls-key  <path>   TLS private key PEM");
             Console.WriteLine();

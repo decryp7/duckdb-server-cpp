@@ -77,7 +77,7 @@ static void usage(const char* prog) {
         << "  --db       <path>   DuckDB file or :memory:  (default: :memory:)\n\n"
         << "Network:\n"
         << "  --host     <addr>   Bind address             (default: 0.0.0.0)\n"
-        << "  --port     <n>      gRPC port                (default: 17777)\n"
+        << "  --port     <n>      gRPC port                (default: 19100)\n"
         << "  --tls-cert <path>   TLS certificate PEM\n"
         << "  --tls-key  <path>   TLS private key PEM\n\n"
         << "Concurrency (" << hw << " logical CPUs detected):\n"

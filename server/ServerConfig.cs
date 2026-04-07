@@ -45,12 +45,12 @@ namespace DuckDbServer
         /// <summary>
         /// TCP port for the gRPC server to listen on.
         ///
-        /// <para><b>Default:</b> 17777. Choose a port not used by other services.
+        /// <para><b>Default:</b> 19100. Choose a port not used by other services.
         /// Ports below 1024 require root/administrator privileges on most systems.</para>
         ///
         /// <para><b>CLI flag:</b> <c>--port &lt;n&gt;</c></para>
         /// </summary>
-        public int Port { get; set; } = 17777;
+        public int Port { get; set; } = 19100;
 
         /// <summary>
         /// Total number of DuckDB read connections in the pool (across all shards).

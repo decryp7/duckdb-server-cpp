@@ -6,7 +6,7 @@ REM  Runs the client examples against a running DuckDB gRPC server.
 REM
 REM  Prerequisites:
 REM    1. Start the server first: run_server.bat
-REM    2. The server must be listening on localhost:17777 (default)
+REM    2. The server must be listening on localhost:19100 (default)
 REM
 REM  Examples executed:
 REM    1. Basic query     — SELECT with column access

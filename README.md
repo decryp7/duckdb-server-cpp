@@ -99,7 +99,7 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--db` | `:memory:` | DuckDB file path |
-| `--port` | `17777` | gRPC listen port |
+| `--port` | `19100` | gRPC listen port |
 | `--shards` | `1` | Number of DuckDB instances |
 | `--readers` | `nCPU×2` | Total connection pool size |
 | `--batch-ms` | `5` | Write batch window (ms) |

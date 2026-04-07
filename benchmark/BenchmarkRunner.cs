@@ -17,7 +17,7 @@ namespace DuckDbBenchmark
         private readonly int port;
         private readonly int warmupOps;
 
-        public BenchmarkRunner(string host = "localhost", int port = 17777, int warmupOps = 10)
+        public BenchmarkRunner(string host = "localhost", int port = 19100, int warmupOps = 10)
         {
             this.host = host;
             this.port = port;

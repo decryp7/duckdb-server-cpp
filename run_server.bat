@@ -7,7 +7,7 @@ REM
 REM  Configuration:
 REM    --db data.duckdb    File-based database for persistence.
 REM
-REM    --port 17777        gRPC listen port.
+REM    --port 19100        gRPC listen port.
 REM
 REM    --readers 128       Connection pool sized for 100+ concurrent readers.
 REM                        Must be >= your peak concurrent reader count.
@@ -51,7 +51,7 @@ echo.
 
 server\bin\Release\DuckDbServer.exe ^
     --db data.duckdb ^
-    --port 17777 ^
+    --port 19100 ^
     --shards 8 ^
     --readers 128 ^
     --batch-ms 1 ^
