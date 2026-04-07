@@ -397,13 +397,35 @@ namespace DuckDbServer
         // ── Execute ──────────────────────────────────────────────────────────
 
         /// <summary>
+        /// Returns true if the SQL statement is a simple INSERT (starts with the
+        /// keyword INSERT after optional leading whitespace). INSERT statements can
+        /// bypass the WriteSerializer and execute directly on the bulk connections
+        /// because DuckDB guarantees that concurrent appends do not conflict.
+        /// </summary>
+        private static bool IsSimpleInsert(string sql)
+        {
+            if (sql == null || sql.Length < 6) return false;
+            int i = 0;
+            while (i < sql.Length && char.IsWhiteSpace(sql[i])) i++;
+            if (i + 6 > sql.Length) return false;
+            return sql.Substring(i, 6).Equals("INSERT", StringComparison.OrdinalIgnoreCase)
+                && (i + 6 >= sql.Length || char.IsWhiteSpace(sql[i + 6]));
+        }
+
+        /// <summary>
         /// Handles a write (DML or DDL) request from a gRPC client.
         ///
         /// <para><b>Flow:</b></para>
         /// <list type="number">
         ///   <item><description>Validate that the SQL string is non-empty.</description></item>
         ///   <item><description>
-        ///     Fan out the SQL to ALL shards via <see cref="ShardedDuckDb.WriteToAll"/>.
+        ///     For INSERT statements, bypass the WriteSerializer and execute directly on
+        ///     each shard's BulkConnection via <see cref="ShardedDuckDb.BulkExecuteAll"/>.
+        ///     DuckDB guarantees concurrent appends don't conflict, so this is safe and
+        ///     avoids the serializer's queue/batch overhead.
+        ///   </description></item>
+        ///   <item><description>
+        ///     For all other DML/DDL, fan out via <see cref="ShardedDuckDb.WriteToAll"/>.
         ///     Each shard's <see cref="IWriteSerializer"/> queues the statement and batches
         ///     it with other concurrent writes into a single transaction for throughput.
         ///   </description></item>
@@ -431,8 +453,14 @@ namespace DuckDbServer
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = "SQL required" });
             }
 
-            // Fan out write to all shards. This blocks until all shards have committed.
-            var result = shardedDb.WriteToAll(sql);
+            // INSERT statements can bypass WriteSerializer and execute directly on
+            // bulk connections. DuckDB guarantees concurrent appends don't conflict.
+            WriteResult result;
+            if (IsSimpleInsert(sql))
+                result = shardedDb.BulkExecuteAll(sql);
+            else
+                result = shardedDb.WriteToAll(sql);
+
             if (!result.Ok)
             {
                 Interlocked.Increment(ref errors);

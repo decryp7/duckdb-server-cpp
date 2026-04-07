@@ -385,6 +385,17 @@ private:
      */
     WriteResult write_to_all(const std::string& sql);
 
+    /**
+     * @brief Execute SQL directly on bulk_conn for all shards, bypassing WriteSerializer.
+     *
+     * Used for INSERT statements which can safely run concurrently with other
+     * appends. Avoids the WriteSerializer batch queue for lower latency.
+     *
+     * @param sql  The INSERT SQL to execute on every shard's bulk_conn.
+     * @return     WriteResult indicating success or the first error encountered.
+     */
+    WriteResult bulk_execute_all(const std::string& sql);
+
     ServerConfig cfg_;                             ///< Copy of the server configuration.
     std::vector<std::unique_ptr<Shard>> shards_;   ///< All shards (1 unless --shards > 1).
     QueryCache cache_;                             ///< Thread-safe query result cache.

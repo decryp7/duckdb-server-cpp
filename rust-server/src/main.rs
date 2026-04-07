@@ -202,8 +202,16 @@ impl DuckDbService for DuckDbServerImpl {
             self.stat_errors.fetch_add(1, Ordering::Relaxed);
             return Ok(Response::new(ExecuteResponse { success: false, error: "SQL required".into() }));
         }
-        // Write: fan-out to ALL shards + invalidate cache
-        match self.sharded_db.write_to_all(&sql) {
+
+        // INSERT statements bypass WriteSerializer for direct execution on bulk_conn.
+        // DuckDB guarantees concurrent appends don't conflict.
+        let result = if is_simple_insert(&sql) {
+            self.sharded_db.bulk_execute_all(&sql)
+        } else {
+            self.sharded_db.write_to_all(&sql)
+        };
+
+        match result {
             Ok(()) => {
                 self.query_cache.invalidate();
                 self.stat_writes.fetch_add(1, Ordering::Relaxed);
@@ -254,6 +262,18 @@ impl DuckDbService for DuckDbServerImpl {
             port: self.port as i32,
         }))
     }
+}
+
+// ── INSERT detection ────────────────────────────────────────────────────────
+
+/// Returns true if the SQL starts with the INSERT keyword (after optional whitespace).
+/// INSERT statements can bypass the WriteSerializer because DuckDB guarantees that
+/// concurrent appends don't conflict.
+fn is_simple_insert(sql: &str) -> bool {
+    let trimmed = sql.trim_start();
+    trimmed.len() >= 6
+        && trimmed[..6].eq_ignore_ascii_case("insert")
+        && (trimmed.len() == 6 || trimmed.as_bytes()[6].is_ascii_whitespace())
 }
 
 // ── Arrow → Protobuf conversion ─────────────────────────────────────────────

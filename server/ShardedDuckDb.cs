@@ -197,6 +197,44 @@ namespace DuckDbServer
         }
 
         /// <summary>
+        /// Execute SQL directly on each shard's BulkConnection, bypassing WriteSerializer.
+        /// Used for INSERT statements that can safely run concurrently — DuckDB guarantees
+        /// concurrent appends don't conflict.
+        ///
+        /// <para><b>Thread Safety:</b> Each shard's BulkConnection is protected by its
+        /// <see cref="Shard.BulkLock"/>. Multiple concurrent BulkExecuteAll calls will
+        /// serialize per-shard but can execute across shards in parallel.</para>
+        /// </summary>
+        /// <param name="sql">The INSERT SQL statement to execute on all shards.</param>
+        /// <returns>
+        /// <see cref="WriteResult"/> with <c>Ok = true</c> if all shards succeeded, or
+        /// the first error encountered.
+        /// </returns>
+        public WriteResult BulkExecuteAll(string sql)
+        {
+            for (int i = 0; i < shards.Length; i++)
+            {
+                var shard = shards[i];
+                lock (shard.BulkLock)
+                {
+                    try
+                    {
+                        using (var cmd = shard.BulkConnection.CreateCommand())
+                        {
+                            cmd.CommandText = sql;
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        return WriteResult.Failure(ex.Message);
+                    }
+                }
+            }
+            return WriteResult.Success();
+        }
+
+        /// <summary>
         /// Executes a write on ALL shards using pre-built SQL. This is a convenience
         /// alias for <see cref="WriteToAll"/> used by the BulkInsert handler where the
         /// SQL has already been constructed by <see cref="BulkInsertSqlBuilder"/>.

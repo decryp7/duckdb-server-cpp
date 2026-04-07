@@ -671,7 +671,15 @@ grpc::Status DuckGrpcServer::Execute(
         response->set_error("SQL required");
         return grpc::Status::OK;
     }
-    const WriteResult wr = write_to_all(request->sql());
+    WriteResult wr;
+    if (is_simple_insert(request->sql())) {
+        // INSERT statements can bypass the WriteSerializer queue and execute
+        // directly on bulk_conn. DuckDB guarantees concurrent appends don't conflict.
+        wr = bulk_execute_all(request->sql());
+    } else {
+        // Non-INSERT DML/DDL goes through WriteSerializer for batching and serialization.
+        wr = write_to_all(request->sql());
+    }
     if (!wr.ok) {
         stat_errors_.fetch_add(1);
         response->set_success(false);
