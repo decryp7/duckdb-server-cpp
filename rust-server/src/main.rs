@@ -242,28 +242,39 @@ impl DuckDbService for DuckDbServerImpl {
             if let Some(first) = batches.first() {
                 let schema = first.schema();
                 let mut buf = Vec::new();
+                match StreamWriter::try_new(&mut buf, &schema)
+                    .and_then(|mut w| { w.finish()?; Ok(()) })
                 {
-                    let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
-                    writer.finish().unwrap();
+                    Ok(()) => {
+                        let resp = ArrowResponse { ipc_data: buf, row_count: 0 };
+                        if tx.blocking_send(Ok(resp)).is_err() { return; }
+                    }
+                    Err(e) => {
+                        let _ = tx.blocking_send(Err(Status::internal(format!("Arrow schema: {}", e))));
+                        return;
+                    }
                 }
-                let resp = ArrowResponse { ipc_data: buf, row_count: 0 };
-                if tx.blocking_send(Ok(resp)).is_err() { return; }
             }
 
             // Send each batch as IPC
             for batch in &batches {
                 let schema = batch.schema();
                 let mut buf = Vec::new();
+                match StreamWriter::try_new(&mut buf, &schema)
+                    .and_then(|mut w| { w.write(batch)?; w.finish()?; Ok(()) })
                 {
-                    let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
-                    writer.write(batch).unwrap();
-                    writer.finish().unwrap();
+                    Ok(()) => {
+                        let resp = ArrowResponse {
+                            ipc_data: buf,
+                            row_count: batch.num_rows() as i32,
+                        };
+                        if tx.blocking_send(Ok(resp)).is_err() { return; }
+                    }
+                    Err(e) => {
+                        let _ = tx.blocking_send(Err(Status::internal(format!("Arrow IPC: {}", e))));
+                        return;
+                    }
                 }
-                let resp = ArrowResponse {
-                    ipc_data: buf,
-                    row_count: batch.num_rows() as i32,
-                };
-                if tx.blocking_send(Ok(resp)).is_err() { return; }
             }
 
             stat_reads.fetch_add(1, Ordering::Relaxed);
