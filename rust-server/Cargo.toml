@@ -18,9 +18,9 @@ tokio = { version = "1", features = ["full"] }  # Async runtime (multi-threaded 
 duckdb = { version = "1.1", features = ["bundled", "vtab-arrow"] }
     # bundled: compiles DuckDB from source (no system install needed)
     # vtab-arrow: enables query_arrow() for zero-copy columnar results
-arrow = { version = "53", default-features = false }
+arrow = { version = "53", default-features = false, features = ["ipc"] }
     # Apache Arrow columnar format — used by duckdb::query_arrow()
-    # default-features=false avoids pulling in IPC/flight/parquet
+    # ipc feature enables Arrow IPC StreamWriter for QueryArrow RPC
 
 # ── Utilities ───────────────────────────────────────────────────────────────
 clap = { version = "4", features = ["derive"] }   # CLI argument parsing with derive macros

@@ -212,9 +212,10 @@ namespace DuckDbServer
         /// </returns>
         public WriteResult BulkExecuteAll(string sql)
         {
-            for (int i = 0; i < shards.Length; i++)
+            if (shards.Length == 1)
             {
-                var shard = shards[i];
+                // Fast path: single shard, no parallelism needed
+                var shard = shards[0];
                 lock (shard.BulkLock)
                 {
                     try
@@ -224,13 +225,38 @@ namespace DuckDbServer
                             cmd.CommandText = sql;
                             cmd.ExecuteNonQuery();
                         }
+                        return WriteResult.Success();
                     }
-                    catch (Exception ex)
-                    {
-                        return WriteResult.Failure(ex.Message);
-                    }
+                    catch (Exception ex) { return WriteResult.Failure(ex.Message); }
                 }
             }
+
+            // Parallel fan-out to all shards
+            var tasks = new Task<WriteResult>[shards.Length];
+            for (int i = 0; i < shards.Length; i++)
+            {
+                int idx = i;
+                tasks[i] = Task.Run(() =>
+                {
+                    var shard = shards[idx];
+                    lock (shard.BulkLock)
+                    {
+                        try
+                        {
+                            using (var cmd = shard.BulkConnection.CreateCommand())
+                            {
+                                cmd.CommandText = sql;
+                                cmd.ExecuteNonQuery();
+                            }
+                            return WriteResult.Success();
+                        }
+                        catch (Exception ex) { return WriteResult.Failure(ex.Message); }
+                    }
+                });
+            }
+            Task.WaitAll(tasks);
+            for (int i = 0; i < tasks.Length; i++)
+                if (!tasks[i].Result.Ok) return tasks[i].Result;
             return WriteResult.Success();
         }
 
