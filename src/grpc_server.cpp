@@ -94,6 +94,7 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         auto s = std::unique_ptr<Shard>(new Shard());
         s->db = nullptr;
         s->writer_conn = nullptr;
+        s->bulk_conn = nullptr;
 
         std::string path = shard_path(cfg_.db_path, i, shard_count);
         const bool is_memory = path.empty() || path == ":memory:";
@@ -109,6 +110,12 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
 
         s->writer = std::unique_ptr<IWriteSerializer>(
             new WriteSerializer(s->writer_conn, cfg_.write_batch_ms, cfg_.write_batch_max));
+
+        if (duckdb_connect(s->db, &s->bulk_conn) == DuckDBError)
+            throw std::runtime_error("Cannot create bulk connection for shard " + std::to_string(i));
+        // Apply threads=1 to bulk connection too
+        duckdb_query(s->bulk_conn, "SET threads=1", nullptr);
+        duckdb_query(s->bulk_conn, "SET preserve_insertion_order=false", nullptr);
 
         // Auto-calculate memory limit per shard if not explicitly set
         if (cfg_.memory_limit.empty() && shard_count > 1) {

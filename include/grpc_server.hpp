@@ -141,11 +141,14 @@ struct Shard {
     std::unique_ptr<ConnectionPool> pool;     ///< Fixed-size pool of read connections.
     duckdb_connection writer_conn;            ///< Dedicated connection for write operations.
     std::unique_ptr<IWriteSerializer> writer; ///< Batching write serializer (owns a background thread).
+    duckdb_connection bulk_conn;              ///< Dedicated connection for Appender-based bulk inserts.
+    std::mutex bulk_mu;                       ///< Mutex protecting bulk_conn (Appender is not thread-safe).
 
     ~Shard() {
         writer.reset();                       /* Stop writer thread first. */
         pool.reset();                         /* Close all pooled read connections. */
         if (writer_conn) duckdb_disconnect(&writer_conn);
+        if (bulk_conn) duckdb_disconnect(&bulk_conn);
         if (db) duckdb_close(&db);
     }
 };
@@ -344,11 +347,11 @@ public:
         duckdb::v1::StatsResponse*) override;
 
     /**
-     * @brief Columnar bulk insert from protobuf arrays.
+     * @brief Columnar bulk insert from protobuf arrays using the Appender API.
      *
-     * Builds a multi-row INSERT SQL statement from the columnar data in
-     * the request, then routes it through write_to_all().  String values
-     * are SQL-escaped (single quotes doubled).  Invalidates the query cache.
+     * Uses DuckDB's Appender API to bypass SQL parsing entirely (10-100x
+     * faster than INSERT SQL).  Each shard has a dedicated bulk_conn with
+     * mutex for thread safety.  Invalidates the query cache.
      */
     grpc::Status BulkInsert(grpc::ServerContext*, const duckdb::v1::BulkInsertRequest*,
         duckdb::v1::BulkInsertResponse*) override;
