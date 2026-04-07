@@ -1,4 +1,4 @@
-# DuckDB gRPC Server  v5.1
+# DuckDB gRPC Server  v5.2
 
 Three server implementations (C#, C++, Rust) and a .NET 4.6.2 client.
 All use the same `proto/duckdb_service.proto` — fully interoperable.
@@ -89,6 +89,10 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | **Late materialization** | Extended to 1000 rows for faster LIMIT/pagination queries |
 | **Allocator flush** | 128MB threshold reduces OS memory return overhead |
 | **Protobuf Arena** | C++ uses Arena allocation for 40-60% fewer mallocs in Query |
+| **Concurrent appends** | INSERT via Execute bypasses write queue for direct execution |
+| **QueryArrow RPC** | Rust server streams Arrow IPC for zero-copy reads |
+| **Sorted insert** | Optional sort_columns in BulkInsert for better zonemap effectiveness |
+| **Parallel write fan-out** | std::async (C++), Task.Run (C#), thread::scope (Rust) |
 | **Server GC** | .NET server GC mode (1 thread per CPU core) |
 | **gRPC tuning** | 200 max streams, 2MB write buffer, keepalive |
 
@@ -168,7 +172,8 @@ src/                             C++ implementation
 
 | Version | Summary |
 |---|---|
-| **v5.1** | Performance: auto memory_limit/shard, late materialization, allocator flush, Arena alloc (C++), temp_directory |
+| **v5.2** | QueryArrow RPC, concurrent appends, sorted insert, parallel fan-out, 28 bug fixes |
+| v5.1 | Performance: auto memory_limit/shard, late materialization, allocator flush, Arena alloc (C++), temp_directory |
 | **v5.0** | Custom gRPC, no Arrow, sharding, caching, 3 server implementations |
 | v4.x | Arrow Flight (removed — .NET 4.6.2 incompatible) |
 | v3.x | IOCP server |

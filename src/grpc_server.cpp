@@ -845,7 +845,7 @@ grpc::Status DuckGrpcServer::BulkInsert(
             // Build: INSERT INTO table SELECT * FROM (VALUES (...), ...) AS _t(c1,c2,...) ORDER BY sort_col1, ...
             std::string sql;
             sql.reserve(row_count * col_count * 10 + 200);
-            sql += "INSERT INTO " + table + " SELECT * FROM (VALUES ";
+            sql += "INSERT INTO " + quote_ident(table) + " SELECT * FROM (VALUES ";
 
             for (int r = 0; r < row_count; ++r) {
                 if (r > 0) sql += ", ";

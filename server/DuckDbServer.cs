@@ -826,7 +826,7 @@ namespace DuckDbServer
             var sb = new System.Text.StringBuilder(rowCount * colCount * 10 + 200);
 
             // Build: INSERT INTO table SELECT * FROM (VALUES (...), (...)) AS _t(col1, col2) ORDER BY sort_col
-            sb.Append("INSERT INTO ").Append(table).Append(" SELECT * FROM (VALUES ");
+            sb.Append("INSERT INTO \"").Append(table.Replace("\"", "\"\"")).Append("\" SELECT * FROM (VALUES ");
 
             for (int r = 0; r < rowCount; r++)
             {
