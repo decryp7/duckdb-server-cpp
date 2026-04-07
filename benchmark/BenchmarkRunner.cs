@@ -468,5 +468,241 @@ namespace DuckDbBenchmark
                 catch { /* ignore warmup errors */ }
             }
         }
+
+        // ── Scenario 7: Cache Hit vs Cache Miss ─────────────────────────────
+
+        /// <summary>
+        /// Measures the performance difference between cache hits and cache misses.
+        /// First run: cache miss (DuckDB executes the query).
+        /// Second run: cache hit (returns from QueryCache, ~0.1ms).
+        /// </summary>
+        public BenchmarkResult RunCacheHitTest(int concurrency, int opsPerClient, int rowCount = 100)
+        {
+            string sql = string.Format("SELECT range AS id, random() AS value FROM range(0, {0})", rowCount);
+
+            Console.WriteLine("  Starting: {0} concurrent cache-hit readers, {1} ops each, {2} rows...",
+                concurrency, opsPerClient, rowCount);
+
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
+            {
+                // Prime the cache with a single query
+                using (var r = client.Query(sql)) { }
+
+                // Now all subsequent queries should hit cache
+                var tracker = new LatencyTracker();
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                var tasks = new System.Threading.Tasks.Task[concurrency];
+                for (int i = 0; i < concurrency; i++)
+                    tasks[i] = System.Threading.Tasks.Task.Run(() => ReaderWorker(client, sql, opsPerClient, tracker));
+
+                System.Threading.Tasks.Task.WaitAll(tasks);
+                stopwatch.Stop();
+
+                return tracker.BuildResult(
+                    string.Format("Cache Hit x{0} ({1} rows)", concurrency, rowCount),
+                    string.Format("{0} threads, {1} ops each. Query pre-cached. Measures QueryCache throughput.", concurrency, opsPerClient),
+                    concurrency,
+                    stopwatch.ElapsedMilliseconds);
+            }
+        }
+
+        // ── Scenario 8: INSERT via Execute (concurrent append fast path) ────
+
+        /// <summary>
+        /// Tests the concurrent append fast path: INSERT statements bypass the
+        /// WriteSerializer queue and execute directly on the bulk connection.
+        /// Compares against regular Execute which goes through the write queue.
+        /// </summary>
+        public BenchmarkResult RunConcurrentInserts(int concurrency, int opsPerClient)
+        {
+            Console.WriteLine("  Starting: {0} concurrent INSERT-via-Execute, {1} ops each...",
+                concurrency, opsPerClient);
+
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
+            {
+                client.Execute("DROP TABLE IF EXISTS bench_insert_fast");
+                client.Execute("CREATE TABLE bench_insert_fast (id INTEGER, value DOUBLE, label TEXT)");
+
+                var tracker = new LatencyTracker();
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                var tasks = new System.Threading.Tasks.Task[concurrency];
+                for (int i = 0; i < concurrency; i++)
+                {
+                    int clientId = i;
+                    tasks[i] = System.Threading.Tasks.Task.Run(() =>
+                    {
+                        for (int j = 0; j < opsPerClient; j++)
+                        {
+                            int id = clientId * 100000 + j;
+                            string sql = string.Format(
+                                "INSERT INTO bench_insert_fast VALUES ({0}, {1}, 'fast_{2}')",
+                                id, (clientId + j * 0.001).ToString(System.Globalization.CultureInfo.InvariantCulture), j);
+
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            try
+                            {
+                                client.Execute(sql);
+                                sw.Stop();
+                                tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
+                            }
+                            catch
+                            {
+                                sw.Stop();
+                                tracker.RecordError();
+                            }
+                        }
+                    });
+                }
+
+                System.Threading.Tasks.Task.WaitAll(tasks);
+                stopwatch.Stop();
+
+                return tracker.BuildResult(
+                    string.Format("INSERT Fast Path x{0}", concurrency),
+                    string.Format("{0} threads, {1} INSERTs each. Uses concurrent append fast path (bypasses write queue).", concurrency, opsPerClient),
+                    concurrency,
+                    stopwatch.ElapsedMilliseconds);
+            }
+        }
+
+        // ── Scenario 9: UPDATE/DELETE via Execute (write serializer path) ───
+
+        /// <summary>
+        /// Tests UPDATE statements which go through the WriteSerializer (not the
+        /// fast path). Provides comparison against the INSERT fast path.
+        /// </summary>
+        public BenchmarkResult RunConcurrentUpdates(int concurrency, int opsPerClient)
+        {
+            Console.WriteLine("  Starting: {0} concurrent UPDATEs (write serializer path), {1} ops each...",
+                concurrency, opsPerClient);
+
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
+            {
+                // Create table with data to update
+                client.Execute("DROP TABLE IF EXISTS bench_update");
+                client.Execute("CREATE TABLE bench_update (id INTEGER, value DOUBLE)");
+                client.Execute("INSERT INTO bench_update SELECT range, random() FROM range(0, 1000)");
+
+                var tracker = new LatencyTracker();
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                var tasks = new System.Threading.Tasks.Task[concurrency];
+                for (int i = 0; i < concurrency; i++)
+                {
+                    int clientId = i;
+                    tasks[i] = System.Threading.Tasks.Task.Run(() =>
+                    {
+                        for (int j = 0; j < opsPerClient; j++)
+                        {
+                            string sql = string.Format(
+                                "UPDATE bench_update SET value = {0} WHERE id = {1}",
+                                (clientId + j * 0.001).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                j % 1000);
+
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            try
+                            {
+                                client.Execute(sql);
+                                sw.Stop();
+                                tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
+                            }
+                            catch
+                            {
+                                sw.Stop();
+                                tracker.RecordError();
+                            }
+                        }
+                    });
+                }
+
+                System.Threading.Tasks.Task.WaitAll(tasks);
+                stopwatch.Stop();
+
+                return tracker.BuildResult(
+                    string.Format("UPDATE Serialized x{0}", concurrency),
+                    string.Format("{0} threads, {1} UPDATEs each. Uses WriteSerializer (batched transactions).", concurrency, opsPerClient),
+                    concurrency,
+                    stopwatch.ElapsedMilliseconds);
+            }
+        }
+
+        // ── Scenario 10: BulkInsert (Appender API) ──────────────────────────
+
+        /// <summary>
+        /// Tests the BulkInsert RPC which uses the DuckDB Appender API (C++/C#)
+        /// or direct SQL (Rust) for high-throughput batch insertion.
+        /// </summary>
+        public BenchmarkResult RunBulkInsert(int rowCount, int iterations)
+        {
+            Console.WriteLine("  Starting: BulkInsert {0:N0} rows x {1} iterations...",
+                rowCount, iterations);
+
+            using (var client = new DuckDbClient.DuckDbClient(host, port))
+            {
+                client.Execute("DROP TABLE IF EXISTS bench_bulk");
+                client.Execute("CREATE TABLE bench_bulk (id INTEGER, value DOUBLE, label TEXT)");
+
+                var tracker = new LatencyTracker();
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                for (int iter = 0; iter < iterations; iter++)
+                {
+                    // Build columnar data for BulkInsert
+                    var columns = new DuckDbProto.ColumnMeta[]
+                    {
+                        new DuckDbProto.ColumnMeta { Name = "id", Type = DuckDbProto.ColumnType.TypeInt32 },
+                        new DuckDbProto.ColumnMeta { Name = "value", Type = DuckDbProto.ColumnType.TypeDouble },
+                        new DuckDbProto.ColumnMeta { Name = "label", Type = DuckDbProto.ColumnType.TypeString },
+                    };
+
+                    var idData = new DuckDbProto.ColumnData();
+                    var valData = new DuckDbProto.ColumnData();
+                    var lblData = new DuckDbProto.ColumnData();
+
+                    for (int r = 0; r < rowCount; r++)
+                    {
+                        idData.Int32Values.Add(iter * rowCount + r);
+                        valData.DoubleValues.Add(r * 0.1);
+                        lblData.StringValues.Add("bulk_" + r);
+                    }
+
+                    var request = new DuckDbProto.BulkInsertRequest
+                    {
+                        Table = "bench_bulk",
+                        RowCount = rowCount,
+                    };
+                    request.Columns.AddRange(columns);
+                    request.Data.Add(idData);
+                    request.Data.Add(valData);
+                    request.Data.Add(lblData);
+
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        var response = client.BulkInsert(request);
+                        sw.Stop();
+                        if (response.Success)
+                            tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
+                        else
+                            tracker.RecordError();
+                    }
+                    catch
+                    {
+                        sw.Stop();
+                        tracker.RecordError();
+                    }
+                }
+
+                stopwatch.Stop();
+
+                return tracker.BuildResult(
+                    string.Format("BulkInsert ({0:N0} rows)", rowCount),
+                    string.Format("{0:N0} rows x {1} iterations via BulkInsert RPC (Appender API).", rowCount, iterations),
+                    1,
+                    stopwatch.ElapsedMilliseconds);
+            }
+        }
     }
 }

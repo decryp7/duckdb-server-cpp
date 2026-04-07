@@ -206,6 +206,22 @@ namespace DuckDbClient
         /// <returns>A JSON string with server metrics.</returns>
         /// <exception cref="DuckDbException">If the gRPC call fails.</exception>
         /// <exception cref="ObjectDisposedException">If the client has been disposed.</exception>
+        /// <summary>
+        /// Executes a BulkInsert RPC. Sends columnar data to the server for fast batch insertion.
+        /// </summary>
+        public BulkInsertResponse BulkInsert(BulkInsertRequest request)
+        {
+            EnsureNotDisposed();
+            try
+            {
+                return grpcClient.BulkInsert(request);
+            }
+            catch (Grpc.Core.RpcException ex)
+            {
+                throw new DuckDbException("BulkInsert failed: " + ex.Status.Detail, ex);
+            }
+        }
+
         public string GetStats()
         {
             EnsureNotDisposed();

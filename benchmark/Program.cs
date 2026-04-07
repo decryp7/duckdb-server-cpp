@@ -36,7 +36,7 @@ namespace DuckDbBenchmark
             }
 
             Console.WriteLine("==========================================================================");
-            Console.WriteLine("  DuckDB gRPC Server v5.0 — Performance Benchmark");
+            Console.WriteLine("  DuckDB gRPC Server v5.2 — Performance Benchmark");
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
             Console.WriteLine("  Target server  : {0}:{1}", host, port);
@@ -50,6 +50,8 @@ namespace DuckDbBenchmark
             Console.WriteLine("    - Caching:     LRU query cache with TTL (cache hit = 0.1ms)");
             Console.WriteLine("    - Batching:    concurrent writes batched into transactions");
             Console.WriteLine("    - DuckDB:      threads=1/conn, preserve_insertion_order=false");
+            Console.WriteLine("    - Fast path:   INSERT via Execute bypasses write queue");
+            Console.WriteLine("    - Appender:    BulkInsert uses DuckDB Appender API (10-100x)");
             Console.WriteLine();
             Console.WriteLine("  What is measured:");
             Console.WriteLine("    - Throughput:  operations per second (higher = better)");
@@ -110,6 +112,18 @@ namespace DuckDbBenchmark
             Console.WriteLine("  10 threads each send 25 INSERT statements (250 total).");
             Console.WriteLine("  Measures: write batching effectiveness under contention.");
             results.Add(runner.RunConcurrentWriters(10, 25));
+            results.Last().Print();
+
+            Console.WriteLine("--- Test 5: Cache hit performance ---");
+            Console.WriteLine("  10 threads send pre-cached query 50 times each.");
+            Console.WriteLine("  Measures: QueryCache throughput (should be ~0.1ms/op).");
+            results.Add(runner.RunCacheHitTest(10, 50, 100));
+            results.Last().Print();
+
+            Console.WriteLine("--- Test 6: INSERT fast path ---");
+            Console.WriteLine("  10 threads send 25 INSERTs via concurrent append path.");
+            Console.WriteLine("  Measures: INSERT bypass of WriteSerializer queue.");
+            results.Add(runner.RunConcurrentInserts(10, 25));
             results.Last().Print();
         }
 
@@ -197,6 +211,64 @@ namespace DuckDbBenchmark
             results.Last().Print();
 
             results.Add(runner.RunLargeResultSet(rowCount: 24000000, iterations: 1));
+            results.Last().Print();
+
+            // --- Cache performance ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  CACHE HIT PERFORMANCE — QueryCache throughput test");
+            Console.WriteLine("  Pre-cache a query, then measure throughput of cache-only responses.");
+            Console.WriteLine("  Purpose: verify cache hit latency is near-zero (~0.1ms).");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine();
+
+            results.Add(runner.RunCacheHitTest(1, 100, 100));
+            results.Last().Print();
+
+            results.Add(runner.RunCacheHitTest(10, 100, 100));
+            results.Last().Print();
+
+            results.Add(runner.RunCacheHitTest(50, 50, 100));
+            results.Last().Print();
+
+            // --- INSERT fast path vs UPDATE serialized ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  INSERT FAST PATH vs UPDATE SERIALIZED");
+            Console.WriteLine("  INSERT: bypasses WriteSerializer, executes directly on bulk connection.");
+            Console.WriteLine("  UPDATE: goes through WriteSerializer batch queue.");
+            Console.WriteLine("  Purpose: measure the performance gain from concurrent append fast path.");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine();
+
+            results.Add(runner.RunConcurrentInserts(1, 50));
+            results.Last().Print();
+
+            results.Add(runner.RunConcurrentInserts(10, 25));
+            results.Last().Print();
+
+            results.Add(runner.RunConcurrentInserts(50, 20));
+            results.Last().Print();
+
+            results.Add(runner.RunConcurrentUpdates(1, 50));
+            results.Last().Print();
+
+            results.Add(runner.RunConcurrentUpdates(10, 25));
+            results.Last().Print();
+
+            // --- BulkInsert (Appender API) ---
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine("  BULKINSERT (APPENDER API) — Batch insertion throughput");
+            Console.WriteLine("  Uses the BulkInsert RPC which bypasses SQL parsing entirely.");
+            Console.WriteLine("  Purpose: measure Appender API throughput for batch data loading.");
+            Console.WriteLine("==========================================================================");
+            Console.WriteLine();
+
+            results.Add(runner.RunBulkInsert(rowCount: 1000, iterations: 10));
+            results.Last().Print();
+
+            results.Add(runner.RunBulkInsert(rowCount: 10000, iterations: 5));
+            results.Last().Print();
+
+            results.Add(runner.RunBulkInsert(rowCount: 100000, iterations: 3));
             results.Last().Print();
         }
 
