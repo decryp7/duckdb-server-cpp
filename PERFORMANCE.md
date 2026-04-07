@@ -470,6 +470,149 @@ SELECT current_setting('memory_limit');
 
 ---
 
+## Concurrent Append Fast Path
+
+### How It Works
+
+When `Execute(sql)` receives an INSERT statement, it bypasses the WriteSerializer
+queue and executes directly on each shard's dedicated `bulk_conn`:
+
+```
+Execute("INSERT INTO t VALUES (1, 'hello')")
+  ├─ is_simple_insert(sql) → true
+  ├─ bulk_execute_all(sql)        ← Direct execution on bulk_conn (fast)
+  │   ├─ shard[0].bulk_conn: execute
+  │   ├─ shard[1].bulk_conn: execute  (parallel via std::async/Task.Run/thread::scope)
+  │   └─ shard[N].bulk_conn: execute
+  └─ cache.invalidate()
+
+Execute("UPDATE t SET x=1 WHERE id=2")
+  ├─ is_simple_insert(sql) → false
+  └─ write_to_all(sql)           ← WriteSerializer queue (batched, serialized)
+```
+
+**Why this is safe:** DuckDB guarantees concurrent appends never conflict. INSERTs
+only add new rows — they don't modify or delete existing data. UPDATEs and DELETEs
+CAN conflict and must still be serialized.
+
+**Impact:** 2-5× faster INSERT throughput via Execute RPC. Eliminates batch_ms
+wait time and WriteSerializer queue overhead for the common INSERT case.
+
+### Benchmark: INSERT Fast Path vs UPDATE Serialized
+
+| Scenario | Concurrency | Expected Ops/s | Path |
+|----------|------------|----------------|------|
+| INSERT (fast path) | 1 | 200-500 | bulk_conn direct |
+| INSERT (fast path) | 10 | 500-2000 | bulk_conn direct (parallel) |
+| UPDATE (serialized) | 1 | 50-200 | WriteSerializer queue |
+| UPDATE (serialized) | 10 | 100-400 | WriteSerializer batch |
+
+---
+
+## BulkInsert (Appender API)
+
+### How It Works
+
+The BulkInsert RPC uses the DuckDB Appender API instead of building SQL strings:
+
+```
+BulkInsert(table="events", columns=[id, value, label], data=[...], row_count=10000)
+  ├─ C++:  duckdb_appender_create → duckdb_append_* per cell → duckdb_appender_flush
+  ├─ C#:   DuckDBConnection.CreateAppender → row.AppendValue per cell → Dispose (auto-flush)
+  └─ Rust: build SQL + bulk_execute_all (no native Appender in duckdb-rs for dynamic types)
+```
+
+**Why Appender is faster:** The Appender bypasses the SQL parser, planner, and
+optimizer entirely. It writes directly to DuckDB's storage layer. For 10,000 rows,
+this avoids parsing a 500KB SQL string.
+
+**Impact:** 10-100× faster than SQL INSERT for batch data loading.
+
+### Sorted Insert (Optional)
+
+When `sort_columns` is set in the BulkInsertRequest, data is sorted before
+insertion for better zonemap effectiveness:
+
+```sql
+-- Normal: INSERT INTO events VALUES (3,'buy'), (1,'click'), (2,'view')
+-- Sorted: INSERT INTO events SELECT * FROM (VALUES (3,'buy'), (1,'click'), (2,'view'))
+--         AS _t("id","action") ORDER BY "id"
+```
+
+This uses the SQL path (not Appender) because DuckDB's Appender doesn't support ordering.
+The trade-off: slower insert (~5-10×) but faster selective reads (up to 10× for
+queries with WHERE clauses on the sort column due to zonemap pruning).
+
+---
+
+## QueryArrow RPC (Arrow IPC)
+
+### How It Works
+
+The `QueryArrow` RPC returns query results as Apache Arrow IPC byte streams
+instead of protobuf-encoded columnar data:
+
+```
+QueryArrow("SELECT * FROM events")
+  → ArrowResponse { ipc_data: <schema bytes>, row_count: 0 }     // Schema message
+  → ArrowResponse { ipc_data: <batch bytes>,  row_count: 2048 }  // Data batch 1
+  → ArrowResponse { ipc_data: <batch bytes>,  row_count: 2048 }  // Data batch 2
+  → ...
+```
+
+**Server support:**
+- **Rust:** Full implementation using Arrow IPC `StreamWriter`. Zero-copy from DuckDB's
+  internal Arrow buffers → IPC bytes → gRPC stream.
+- **C++:** Returns UNIMPLEMENTED (Arrow C++ library not linked).
+- **C#:** Returns UNIMPLEMENTED (no Arrow support in .NET 4.6.2).
+
+**Client support:** Any language with an Arrow IPC reader (PyArrow, arrow-rs, etc.)
+can consume the stream. No protobuf deserialization needed — just Arrow IPC decode.
+
+---
+
+## Benchmarking
+
+### Available Benchmark Scenarios
+
+| # | Scenario | What It Measures | Flags |
+|---|----------|-----------------|-------|
+| 1 | Concurrent Readers | Read throughput scaling (1-300 threads) | Standard |
+| 2 | Concurrent Writers | Write batching effectiveness (1-300 threads) | Standard |
+| 3 | Mixed Read/Write | Read/write contention under concurrent load | Standard |
+| 4 | Large Result Sets | Streaming throughput (100K-24M rows) | Standard |
+| 5 | Max Concurrency | Find thread count where errors begin | Full |
+| 6 | Sustained Throughput | 60s stability test (memory leaks, GC pressure) | Full |
+| 7 | **Cache Hit** | QueryCache throughput (~0.1ms expected) | Quick/Standard |
+| 8 | **INSERT Fast Path** | Concurrent append bypass of WriteSerializer | Quick/Standard |
+| 9 | **UPDATE Serialized** | WriteSerializer batch queue baseline | Standard |
+| 10 | **BulkInsert Appender** | Appender API batch insertion (1K-100K rows) | Standard |
+
+### Running Benchmarks
+
+```powershell
+# Quick smoke test (6 scenarios, ~30s)
+run_benchmark.bat --quick
+
+# Standard suite (all 10 scenario types, ~5min)
+run_benchmark.bat
+
+# Full suite + max concurrency + 60s sustained (~15min)
+run_benchmark.bat --full
+```
+
+### What to Look For
+
+| Metric | Good | Concerning |
+|--------|------|-----------|
+| Cache hit latency | <0.5ms | >2ms (cache not working) |
+| INSERT fast path vs UPDATE | INSERT 2-5× faster | Similar (fast path not triggering) |
+| BulkInsert 10K rows | <50ms | >500ms (Appender not used?) |
+| Sustained read 60s | Stable ops/s | Declining ops/s (memory leak) |
+| Error count | 0 | >0 (pool exhaustion, timeout) |
+
+---
+
 ## Implemented Optimizations (v5.2)
 
 All major optimizations from the research phase have been implemented:
