@@ -804,6 +804,78 @@ grpc::Status DuckGrpcServer::BulkInsert(
     }
 
     try {
+        // If sort_columns specified, use SQL with ORDER BY for better zonemap effectiveness.
+        // This is slower than Appender but ensures data is sorted on disk.
+        if (request->sort_columns_size() > 0) {
+            // Build: INSERT INTO table SELECT * FROM (VALUES (...), ...) AS _t(c1,c2,...) ORDER BY sort_col1, ...
+            std::string sql;
+            sql.reserve(row_count * col_count * 10 + 200);
+            sql += "INSERT INTO " + table + " SELECT * FROM (VALUES ";
+
+            for (int r = 0; r < row_count; ++r) {
+                if (r > 0) sql += ", ";
+                sql += "(";
+                for (int c = 0; c < col_count; ++c) {
+                    if (c > 0) sql += ", ";
+                    const auto& cd = request->data(c);
+                    bool is_null = false;
+                    for (int n = 0; n < cd.null_indices_size(); ++n)
+                        if (cd.null_indices(n) == r) { is_null = true; break; }
+                    if (is_null) { sql += "NULL"; continue; }
+                    switch (request->columns(c).type()) {
+                        case duckdb::v1::TYPE_BOOLEAN:
+                            sql += (r < cd.bool_values_size() && cd.bool_values(r)) ? "true" : "false"; break;
+                        case duckdb::v1::TYPE_INT8: case duckdb::v1::TYPE_INT16:
+                        case duckdb::v1::TYPE_INT32: case duckdb::v1::TYPE_UINT8: case duckdb::v1::TYPE_UINT16:
+                            sql += std::to_string(r < cd.int32_values_size() ? cd.int32_values(r) : 0); break;
+                        case duckdb::v1::TYPE_INT64: case duckdb::v1::TYPE_UINT32: case duckdb::v1::TYPE_UINT64:
+                            sql += std::to_string(r < cd.int64_values_size() ? cd.int64_values(r) : 0); break;
+                        case duckdb::v1::TYPE_FLOAT:
+                            sql += std::to_string(r < cd.float_values_size() ? cd.float_values(r) : 0.0f); break;
+                        case duckdb::v1::TYPE_DOUBLE: case duckdb::v1::TYPE_DECIMAL:
+                            sql += std::to_string(r < cd.double_values_size() ? cd.double_values(r) : 0.0); break;
+                        default: {
+                            sql += "'";
+                            if (r < cd.string_values_size()) {
+                                const std::string& sv = cd.string_values(r);
+                                for (size_t si = 0; si < sv.size(); ++si) {
+                                    if (sv[si] == '\'') sql += "''";
+                                    else sql += sv[si];
+                                }
+                            }
+                            sql += "'"; break;
+                        }
+                    }
+                }
+                sql += ")";
+            }
+
+            // Add column aliases and ORDER BY
+            sql += ") AS _t(";
+            for (int c = 0; c < col_count; ++c) {
+                if (c > 0) sql += ", ";
+                sql += request->columns(c).name();
+            }
+            sql += ") ORDER BY ";
+            for (int s = 0; s < request->sort_columns_size(); ++s) {
+                if (s > 0) sql += ", ";
+                sql += request->sort_columns(s);
+            }
+
+            const WriteResult wr = write_to_all(sql);
+            if (!wr.ok) {
+                stat_errors_.fetch_add(1);
+                response->set_success(false);
+                response->set_error(wr.error);
+                return grpc::Status::OK;
+            }
+            cache_.invalidate();
+            stat_queries_write_.fetch_add(1);
+            response->set_success(true);
+            response->set_rows_inserted(row_count);
+            return grpc::Status::OK;
+        }
+
         // Appender API: bypasses SQL parser entirely (10-100x faster than INSERT SQL).
         // Uses dedicated bulk_conn per shard with mutex for thread safety.
         for (auto& shard_ptr : shards_) {

@@ -35,6 +35,7 @@ mod writer;
 use clap::Parser;
 use duckdb::arrow::array::*;
 use duckdb::arrow::datatypes::DataType;
+use duckdb::arrow::ipc::writer::StreamWriter;
 use shard::ShardedDuckDb;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -90,6 +91,7 @@ struct DuckDbServerImpl {
 #[tonic::async_trait]
 impl DuckDbService for DuckDbServerImpl {
     type QueryStream = tokio_stream::wrappers::ReceiverStream<Result<QueryResponse, Status>>;
+    type QueryArrowStream = tokio_stream::wrappers::ReceiverStream<Result<ArrowResponse, Status>>;
 
     async fn query(&self, request: Request<QueryRequest>) -> Result<Response<Self::QueryStream>, Status> {
         let sql = request.into_inner().sql;
