@@ -1,0 +1,498 @@
+# DuckDB gRPC Server — Performance Guide
+
+Detailed code-level optimization guide for the DuckDB gRPC server (C#, C++, Rust).
+
+---
+
+## Table of Contents
+
+1. [Architecture Impact on Performance](#architecture-impact-on-performance)
+2. [DuckDB Tuning (Per-Connection PRAGMAs)](#duckdb-tuning-per-connection-pragmas)
+3. [Sharding: Read vs Write Trade-off](#sharding-read-vs-write-trade-off)
+4. [Query Cache](#query-cache)
+5. [Connection Pool](#connection-pool)
+6. [Write Batching Pipeline](#write-batching-pipeline)
+7. [Columnar Encoding](#columnar-encoding)
+8. [C++ Specific Optimizations](#c-specific-optimizations)
+9. [Rust Specific Optimizations](#rust-specific-optimizations)
+10. [gRPC Tuning](#grpc-tuning)
+11. [Recommended Configurations](#recommended-configurations)
+12. [Bottleneck Analysis](#bottleneck-analysis)
+13. [Future Improvements](#future-improvements)
+
+---
+
+## Architecture Impact on Performance
+
+### Where Time Is Spent
+
+```
+┌──────────────────────────────────────────────────────┐
+│ Typical Query Latency Breakdown                      │
+│                                                      │
+│  DuckDB execution     ████████████████████  85-95%   │
+│  Protobuf encoding    ██                    3-8%     │
+│  gRPC/HTTP/2 framing  █                     1-3%     │
+│  Network I/O          ░                     1-2%     │
+│  Cache check          ░                     <0.1%    │
+└──────────────────────────────────────────────────────┘
+```
+
+**Key insight:** DuckDB query execution dominates latency. Server-side optimizations
+(faster serialization, better pooling) provide marginal gains. The highest-impact
+improvements are:
+
+1. **Query caching** — eliminates DuckDB entirely for repeated queries (~0.1ms)
+2. **Sharding** — N× read throughput (but increases write latency on file DBs)
+3. **DuckDB PRAGMAs** — `preserve_insertion_order=false` gives 1.5-3× faster scans
+
+---
+
+## DuckDB Tuning (Per-Connection PRAGMAs)
+
+Every connection (reader pool + writer) gets these settings:
+
+### `SET threads=1`
+
+**Impact: 2-5× better aggregate throughput under concurrency**
+
+DuckDB's default is `threads=nCPU`. With a pool of N connections, this means
+N × nCPU internal threads all competing for CPU. Setting `threads=1` eliminates
+this contention — the pool itself provides parallelism (N connections = N parallel queries).
+
+```
+WITHOUT threads=1 (pool=8, nCPU=8):
+  64 DuckDB threads fighting for 8 CPU cores → context switching hell
+
+WITH threads=1 (pool=8):
+  8 DuckDB threads, 1 per connection → clean parallel execution
+```
+
+**Where it's set:**
+- C#: `ConnectionPool.ApplyConnectionPragmas()` and `WriteSerializer.ApplyWriterPragmas()`
+- C++: `ConnectionPool::apply_connection_pragmas()` and constructor for `writer_conn`
+- Rust: `ConnectionPool::apply_connection_pragmas()`
+
+**Gotcha:** `SET threads` is PER-CONNECTION, not database-wide. It MUST be applied
+on every new connection. The writer connection was previously missing this setting,
+causing a ~5× write performance regression on multi-shard file databases.
+
+### `SET preserve_insertion_order=false`
+
+**Impact: 1.5-3× faster table scans**
+
+DuckDB normally preserves the order rows were inserted, requiring extra metadata.
+Disabling this allows DuckDB to scan in storage order, enabling better parallelism
+and cache locality. Analytics queries almost never need insertion order.
+
+### `SET checkpoint_threshold='256MB'`
+
+**Impact: 2-5× faster sustained writes (file DB only)**
+
+Checkpoints flush the WAL to the main database file. The default 16MB triggers
+frequent checkpoints during write bursts. 256MB reduces checkpoint frequency by 16×.
+
+**Trade-off:** More data at risk on crash (up to 256MB of WAL not yet checkpointed).
+Recovery time increases proportionally.
+
+### `SET late_materialization_max_rows=1000`
+
+**Impact: Faster ORDER BY...LIMIT queries**
+
+DuckDB 1.2+ defers column fetching for LIMIT queries — operating on row IDs first,
+then fetching only the needed rows. Default is 50 rows. Increased to 1000 for
+common pagination patterns (LIMIT 100, LIMIT 500).
+
+### `SET allocator_flush_threshold='128MB'`
+
+**Impact: Reduces memory return overhead**
+
+Controls when DuckDB returns freed memory to the OS. Setting it to 128MB prevents
+the allocator from doing frequent mmap/munmap syscalls between queries.
+
+### `PRAGMA enable_object_cache`
+
+**Impact: Faster metadata lookups**
+
+Caches table schema, Parquet metadata, and other objects. Negligible memory overhead,
+but avoids redundant catalog lookups for repeated queries.
+
+### `SET memory_limit` (auto-calculated)
+
+**Impact: Prevents OOM with multiple shards**
+
+Without this, each shard claims 80% of RAM independently. With 8 shards, that's
+640% of RAM — guaranteed OOM. The server auto-calculates:
+
+```
+memory_limit = 80% / num_shards
+```
+
+With 4 shards: each gets 20% of RAM. With 1 shard: uses DuckDB default (80%).
+
+---
+
+## Sharding: Read vs Write Trade-off
+
+### How It Works
+
+```
+N shards = N independent DuckDB instances
+
+READS:  Round-robin across shards → N× read throughput
+WRITES: Fan-out to ALL shards → same write throughput as 1 shard
+```
+
+### The File DB Write Problem
+
+Each `COMMIT` on a file-based database triggers `fsync()` to the WAL file for
+durability. With N shards on the same physical disk, N fsyncs serialize at the
+I/O layer:
+
+```
+1 shard:  1 × fsync = ~5ms (SSD) or ~50ms (HDD)
+4 shards: 4 × fsync = ~20ms (SSD) or ~200ms (HDD)
+8 shards: 8 × fsync = ~40ms (SSD) or ~400ms (HDD)
+```
+
+**Rule of thumb:**
+- **In-memory database**: Use many shards (4-8). No fsync, no I/O contention.
+- **File database on SSD**: Use 2-4 shards. Moderate fsync overhead.
+- **File database on HDD**: Use 1-2 shards. fsync dominates write latency.
+
+### Benchmark Reference
+
+| Config | Single Write | 10× Concurrent Writes | Read (10×) |
+|--------|-------------|----------------------|------------|
+| 1 shard, memory | ~2ms | ~5ms (200 ops/s) | ~2ms (5000 ops/s) |
+| 4 shards, memory | ~3ms | ~5ms (200 ops/s) | ~1ms (10000 ops/s) |
+| 1 shard, file SSD | ~8ms | ~15ms (70 ops/s) | ~3ms (3000 ops/s) |
+| 4 shards, file SSD | ~25ms | ~30ms (40 ops/s) | ~1ms (8000 ops/s) |
+| 8 shards, file HDD | ~500ms | ~220ms (40 ops/s) | ~2ms (3500 ops/s) |
+
+---
+
+## Query Cache
+
+### Design
+
+- **Key:** Raw SQL string (exact match only)
+- **Value:** Serialized protobuf QueryResponse messages
+- **TTL:** 60 seconds (hardcoded, configurable in constructor)
+- **Max entries:** 10,000
+- **Invalidation:** Full clear on ANY write (Execute or BulkInsert)
+
+### Performance Characteristics
+
+| Scenario | Latency |
+|----------|---------|
+| Cache hit | ~0.1ms (just protobuf copy + gRPC write) |
+| Cache miss | 5-500ms (DuckDB query + encode + cache store) |
+
+### Limitations
+
+- **No parameterized caching:** `SELECT * FROM t WHERE id=1` and `SELECT * FROM t WHERE id=2` are different cache keys.
+- **Full invalidation:** Any write clears all cache entries. Table-level invalidation would require SQL parsing.
+- **Memory:** Large result sets consume cache memory. 10,000 entries × 1MB avg = ~10GB worst case.
+
+---
+
+## Connection Pool
+
+### Implementation by Language
+
+| Language | Structure | Borrow | Return | Timeout |
+|----------|-----------|--------|--------|---------|
+| C# | ConcurrentBag + SemaphoreSlim | User-mode semaphore | Bag.Add + semaphore.Release | 10s |
+| C++ | std::queue + mutex + condition_variable | cv.wait_until | push + cv.notify_one | 10s |
+| Rust | crossbeam ArrayQueue | Lock-free pop + spin/yield | Lock-free push | 10s |
+
+### Sizing
+
+Default: `2 × logical CPU count`. With shards: divided evenly across shards.
+
+```
+8-core machine, 4 shards: 16 total connections / 4 shards = 4 per shard
+```
+
+Each connection consumes ~10-50MB of DuckDB memory (depends on query complexity).
+Over-provisioning wastes memory; under-provisioning causes borrow timeouts.
+
+---
+
+## Write Batching Pipeline
+
+### Pipeline Stages
+
+```
+Submit() → Queue → CollectBatch → ClassifyDDL → MergeINSERTs → Transaction
+             ↓       (1ms window)   (DDL alone)   (multi-row)   (BEGIN..COMMIT)
+          Enqueue     (max 64)                                      │
+          + block                                               Failure?
+                                                                → ROLLBACK
+                                                                → Retry individually
+```
+
+### Batch Window (`--batch-ms`)
+
+The writer thread waits `batch_ms` milliseconds after the first request
+for additional requests to arrive. Longer windows accumulate more requests
+per transaction (higher throughput) but increase latency.
+
+| batch_ms | Single Write Latency | 100× Concurrent Writes |
+|----------|---------------------|----------------------|
+| 0 | ~2ms | ~50ms (each runs individually) |
+| 1 | ~3ms | ~5ms (batched into 1-2 transactions) |
+| 5 | ~7ms | ~6ms (better batching, slightly higher base) |
+| 50 | ~52ms | ~52ms (diminishing returns, latency dominated) |
+
+**Recommendation:** `--batch-ms 1` for low-latency, `--batch-ms 5` for throughput.
+
+### INSERT Merging
+
+The `InsertBatcher` / `merge_inserts` function combines consecutive single-row
+INSERTs targeting the same table into a single multi-row INSERT:
+
+```sql
+-- Before (3 parse + plan + execute cycles):
+INSERT INTO events VALUES (1, 'click', '2024-01-01')
+INSERT INTO events VALUES (2, 'view', '2024-01-02')
+INSERT INTO events VALUES (3, 'buy', '2024-01-03')
+
+-- After (1 parse + plan + execute cycle):
+INSERT INTO events VALUES (1, 'click', '2024-01-01'), (2, 'view', '2024-01-02'), (3, 'buy', '2024-01-03')
+```
+
+**Impact:** 3-10× faster for batches of small INSERTs (avoids N parse/plan cycles).
+
+---
+
+## Columnar Encoding
+
+### Wire Format
+
+The protobuf protocol uses packed repeated fields per column instead of
+per-cell typed values:
+
+```
+Row format (traditional):              Columnar format (this project):
+  10,000 TypedValue objects              10 ColumnData objects
+  + 1,000 Row objects                    with packed arrays
+  = 11,000 protobuf objects              = 10 protobuf objects
+
+  ~99% fewer allocations, ~80% less wire overhead for numeric data
+```
+
+### Type Packing Rules
+
+| DuckDB Type | Proto Field | Size | C++ Strategy |
+|-------------|-------------|------|-------------|
+| INT32 | int32_values (packed) | 4B | memcpy fast path (no nulls) |
+| INT64, UINT64 | int64_values (packed) | 8B | memcpy fast path (no nulls) |
+| FLOAT | float_values (packed) | 4B | memcpy fast path (no nulls) |
+| DOUBLE | double_values (packed) | 8B | memcpy fast path (no nulls) |
+| INT8, INT16 | int32_values (packed) | widened | Per-element cast (1/2B → 4B) |
+| UINT8, UINT16 | int32_values (packed) | widened | Per-element cast (1/2B → 4B) |
+| UINT32 | int64_values (packed) | widened | Per-element cast (4B → 8B) |
+| BOOLEAN | bool_values (packed) | 1B | Per-element loop |
+| VARCHAR | string_values | var | Inline (≤12B) or pointer |
+| Any with NULLs | + null_indices | 4B/null | Per-element validity check |
+
+---
+
+## C++ Specific Optimizations
+
+### memcpy Fast Path
+
+For non-null numeric columns with matching wire size (INT32, INT64, FLOAT, DOUBLE),
+the server copies the entire column in a single `memcpy()` call:
+
+```cpp
+// FAST PATH: one memcpy for entire column (~10ns for 2048 rows × 4 bytes)
+auto* field = cd->mutable_int32_values();
+field->Resize(cap, 0);
+std::memcpy(field->mutable_data(), vals, row_count * sizeof(int32_t));
+```
+
+This is 2-4× faster than per-element `add_int32_values()` calls because it
+avoids repeated bounds checks, size increments, and function call overhead.
+
+### Protobuf Arena Allocation
+
+The Query handler allocates per-chunk `QueryResponse` objects from a protobuf Arena:
+
+```cpp
+google::protobuf::Arena chunk_arena;
+auto* response = Arena::CreateMessage<QueryResponse>(&chunk_arena);
+// ... populate response ...
+to_cache.push_back(*response);  // copy out for caching
+writer->Write(*response);       // stream to client
+// arena destroyed here — all chunk memory freed in one call
+```
+
+**Impact:** 40-60% fewer malloc/free calls for large result sets. The arena
+pre-allocates memory chunks and deallocates them all at once when destroyed.
+
+### DuckDB String Layout
+
+DuckDB uses a union for string storage (`duckdb_string_t`):
+- Strings ≤ 12 bytes: stored inline in `value.inlined.inlined[12]`
+- Strings > 12 bytes: stored via `value.pointer.ptr`
+- Length is always at `value.inlined.length` (same offset for both layouts)
+
+The C++ server checks the 12-byte threshold and reads from the correct location:
+
+```cpp
+idx_t len = vals[r].value.inlined.length;
+if (len <= 12)
+    cd->add_string_values(std::string(vals[r].value.inlined.inlined, len));
+else
+    cd->add_string_values(std::string(vals[r].value.pointer.ptr, len));
+```
+
+---
+
+## Rust Specific Optimizations
+
+### `query_arrow()` — Zero-Copy Columnar Results
+
+The Rust server uses `query_arrow()` instead of row-by-row `query()`:
+
+```rust
+let arrow_result = stmt.query_arrow([])?;
+let batches: Vec<_> = arrow_result.collect();
+```
+
+This returns Apache Arrow `RecordBatch` objects that share memory with DuckDB's
+internal columnar buffers. No per-row allocation or type conversion is needed.
+
+### `prepare_cached()` — Skip Parse/Plan
+
+```rust
+let mut stmt = conn.prepare_cached(&sql)?;
+```
+
+DuckDB caches the prepared statement per connection. Repeated queries with the
+same SQL text skip the parser and planner entirely. 2-5× faster for small queries.
+
+---
+
+## gRPC Tuning
+
+### Server-Side Settings
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `GRPC_ARG_MAX_CONCURRENT_STREAMS` | 200 | HTTP/2 multiplexing: 200 RPCs per TCP connection |
+| `MaxReceiveMessageSize` | 64MB | Prevents truncation of large BulkInsert payloads |
+| `MaxSendMessageSize` | 64MB | Prevents truncation of large query results |
+| `GRPC_ARG_HTTP2_WRITE_BUFFER_SIZE` | 2MB | Batches small gRPC writes into larger HTTP/2 frames |
+| `GRPC_ARG_HTTP2_BDP_PROBE` | 1 | Auto-tunes TCP window based on bandwidth-delay product |
+| `GRPC_ARG_KEEPALIVE_TIME_MS` | 30000 | Sends keepalive ping every 30s to detect dead connections |
+| `GRPC_ARG_KEEPALIVE_TIMEOUT_MS` | 10000 | Disconnects if no response within 10s |
+| `NUM_CQS` (C++) | nCPU | One completion queue per CPU core |
+| `MAX_POLLERS` (C++) | 2×nCPU | Bounds gRPC polling thread count |
+
+### C# .NET GC
+
+```xml
+<gcServer enabled="true"/>      <!-- One GC heap per CPU core -->
+<gcConcurrent enabled="true"/>  <!-- Background Gen2 collection -->
+```
+
+Server GC uses one heap per core (reduces lock contention) and performs Gen2
+collection on a background thread (reduces pause times from ~100ms to ~10ms).
+
+---
+
+## Recommended Configurations
+
+### Read-Heavy (analytics dashboard, many concurrent readers)
+
+```bash
+# In-memory, 8 shards for maximum read parallelism
+--db :memory: --shards 8 --readers 128 --batch-ms 1 --batch-max 64
+```
+
+### Write-Heavy (event ingestion, ETL pipeline)
+
+```bash
+# File DB, 1-2 shards to minimize fsync overhead
+--db data.duckdb --shards 2 --readers 32 --batch-ms 5 --batch-max 512
+```
+
+### Balanced (mixed read/write workload)
+
+```bash
+# File DB on SSD, 4 shards for good read/write balance
+--db data.duckdb --shards 4 --readers 64 --batch-ms 1 --batch-max 64 --memory-limit 8GB
+```
+
+### Development (single user, simple testing)
+
+```bash
+--db :memory: --shards 1 --readers 4
+```
+
+---
+
+## Bottleneck Analysis
+
+### Identifying the Bottleneck
+
+| Symptom | Bottleneck | Fix |
+|---------|-----------|-----|
+| High read latency, low CPU | DuckDB query execution | Add indexes, optimize SQL, more shards |
+| High read latency, high CPU | Thread contention | Verify threads=1, reduce shards |
+| Pool timeout errors | Not enough connections | Increase --readers |
+| High write latency, file DB | fsync I/O | Reduce --shards, use SSD, or :memory: |
+| High write latency, memory DB | Batch window too large | Reduce --batch-ms |
+| Memory errors (OOM) | Too many shards | Set --memory-limit, reduce --shards |
+| Cache hit rate near 0% | Unique queries | Expected for ad-hoc workloads |
+| Cache hit rate near 100% | Repeated queries | Ideal — cache is working |
+
+### Profiling Commands
+
+```sql
+-- Check query execution time (DuckDB internal)
+EXPLAIN ANALYZE SELECT ...;
+
+-- Check table size and compression
+PRAGMA storage_info('my_table');
+
+-- Check database size
+PRAGMA database_size;
+
+-- Check current memory usage
+PRAGMA memory_limit;
+SELECT current_setting('memory_limit');
+```
+
+---
+
+## Future Improvements
+
+### Tier 1: High Impact, Achievable
+
+| Improvement | Expected Gain | Effort |
+|-------------|--------------|--------|
+| **Appender API for BulkInsert** | 10-100× bulk write | Medium — requires WriteSerializer callback support |
+| **Prepared statement caching** | 30-50% for repeated queries | Medium — protocol change needed |
+| **Concurrent appends** | Eliminates write serialization for INSERTs | Medium — DuckDB guarantees no conflicts |
+
+### Tier 2: Architectural Changes
+
+| Improvement | Expected Gain | Effort |
+|-------------|--------------|--------|
+| **Arrow IPC wire format** | Zero-copy end-to-end | High — protocol redesign |
+| **gRPC async/callback API** | Better scaling (no thread-per-RPC) | High — server rewrite |
+| **Sorted insert support** | 10× selective reads via better zonemaps | Medium — schema hint |
+
+### Why Not FlatBuffers?
+
+FlatBuffers deserialization is 4-15× faster than protobuf. However:
+- The bottleneck is DuckDB (85-95%), not serialization (3-8%)
+- Packed repeated fields in protobuf already achieve near-zero-copy for numeric data
+- FlatBuffers gRPC support is less mature, especially for C# .NET 4.6.2
+- Switching would require rewriting clients in all 3 languages
+- **Expected improvement: <5% overall (not worth the complexity)**
