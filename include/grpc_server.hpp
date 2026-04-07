@@ -238,6 +238,32 @@ public:
      */
     void invalidate() { std::lock_guard<std::mutex> lock(mu_); entries_.clear(); }
 
+    /**
+     * @brief Invalidate only cache entries whose SQL key contains the given table name.
+     *
+     * Performs a case-insensitive substring match against each cached SQL key.
+     * If table_name is empty, falls back to full invalidation (same as invalidate()).
+     *
+     * Over-invalidation is possible (e.g., table "users" matches "users_archive")
+     * but this is safe: extra cache misses, never stale reads.
+     *
+     * @param table_name  Table name to match. Empty triggers full invalidation.
+     */
+    void invalidate_table(const std::string& table_name) {
+        if (table_name.empty()) { invalidate(); return; }
+        std::lock_guard<std::mutex> lock(mu_);
+        std::string lower_table = table_name;
+        for (auto& c : lower_table) c = std::tolower(static_cast<unsigned char>(c));
+        for (auto it = entries_.begin(); it != entries_.end(); ) {
+            std::string lower_key = it->first;
+            for (auto& c : lower_key) c = std::tolower(static_cast<unsigned char>(c));
+            if (lower_key.find(lower_table) != std::string::npos)
+                it = entries_.erase(it);
+            else
+                ++it;
+        }
+    }
+
 private:
     /** @brief A single cached query result with its creation timestamp. */
     struct Entry {

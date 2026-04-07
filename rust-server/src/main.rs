@@ -300,7 +300,7 @@ impl DuckDbService for DuckDbServerImpl {
 
         match result {
             Ok(()) => {
-                self.query_cache.invalidate();
+                self.query_cache.invalidate_table(&extract_table_name(&sql));
                 self.stat_writes.fetch_add(1, Ordering::Relaxed);
                 Ok(Response::new(ExecuteResponse { success: true, error: String::new() }))
             }
@@ -313,6 +313,7 @@ impl DuckDbService for DuckDbServerImpl {
 
     async fn bulk_insert(&self, request: Request<BulkInsertRequest>) -> Result<Response<BulkInsertResponse>, Status> {
         let req = request.into_inner();
+        let table_name = req.table.clone(); // Capture before move for cache invalidation
         // BulkInsert: build SQL then fan-out to ALL shards via dedicated bulk connections.
         // Uses bulk_execute_all() which bypasses the WriteSerializer queue/batch entirely,
         // executing directly on each shard's dedicated bulk_conn for lower latency.
@@ -352,7 +353,7 @@ impl DuckDbService for DuckDbServerImpl {
         }).await.map_err(|e| Status::internal(e.to_string()))?;
         match result {
             Ok(count) => {
-                self.query_cache.invalidate();
+                self.query_cache.invalidate_table(&table_name);
                 self.stat_writes.fetch_add(1, Ordering::Relaxed);
                 Ok(Response::new(BulkInsertResponse { success: true, error: String::new(), rows_inserted: count as i64 }))
             }
@@ -376,6 +377,73 @@ impl DuckDbService for DuckDbServerImpl {
             port: self.port as i32,
         }))
     }
+}
+
+// ── Table name extraction for targeted cache invalidation ───────────────────
+
+/// Extract the first table name from a DML/DDL SQL statement.
+/// Returns an empty string if unable to parse (triggers full cache invalidation).
+fn extract_table_name(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    // Skip whitespace
+    while i < len && bytes[i].is_ascii_whitespace() { i += 1; }
+
+    // Case-insensitive keyword match helper
+    let match_kw = |pos: &mut usize, kw: &[u8]| -> bool {
+        let klen = kw.len();
+        if *pos + klen > len { return false; }
+        for j in 0..klen {
+            if bytes[*pos + j].to_ascii_uppercase() != kw[j] { return false; }
+        }
+        if *pos + klen < len && !bytes[*pos + klen].is_ascii_whitespace() { return false; }
+        *pos += klen;
+        true
+    };
+
+    let skip_ws = |pos: &mut usize| {
+        while *pos < len && bytes[*pos].is_ascii_whitespace() { *pos += 1; }
+    };
+
+    if match_kw(&mut i, b"INSERT") {
+        skip_ws(&mut i);
+        if !match_kw(&mut i, b"INTO") { return String::new(); }
+    } else if match_kw(&mut i, b"UPDATE") {
+        // table name follows directly
+    } else if match_kw(&mut i, b"DELETE") {
+        skip_ws(&mut i);
+        if !match_kw(&mut i, b"FROM") { return String::new(); }
+    } else if match_kw(&mut i, b"CREATE") || match_kw(&mut i, b"DROP") || match_kw(&mut i, b"ALTER") {
+        skip_ws(&mut i);
+        if !match_kw(&mut i, b"TABLE") { return String::new(); }
+        // Skip optional IF [NOT] EXISTS
+        skip_ws(&mut i);
+        if match_kw(&mut i, b"IF") {
+            skip_ws(&mut i);
+            match_kw(&mut i, b"NOT"); // optional
+            skip_ws(&mut i);
+            match_kw(&mut i, b"EXISTS");
+        }
+    } else {
+        return String::new(); // Unknown statement — full invalidation
+    }
+
+    // Skip whitespace before table name
+    skip_ws(&mut i);
+
+    // Extract table name (handle quoted identifiers)
+    let start = i;
+    if i < len && bytes[i] == b'"' {
+        i += 1;
+        while i < len && bytes[i] != b'"' { i += 1; }
+        if i < len { i += 1; } // skip closing quote
+        return if i - start >= 2 { sql[start + 1..i - 1].to_string() } else { String::new() };
+    }
+    while i < len && !bytes[i].is_ascii_whitespace() && bytes[i] != b'(' && bytes[i] != b';' { i += 1; }
+    if i == start { return String::new(); }
+    sql[start..i].to_string()
 }
 
 // ── INSERT detection ────────────────────────────────────────────────────────

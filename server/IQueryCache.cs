@@ -77,6 +77,14 @@ namespace DuckDbServer
         /// </summary>
         void Invalidate();
 
+        /// <summary>
+        /// Invalidates cache entries whose SQL key contains the specified table name
+        /// (case-insensitive substring match). If tableName is null or empty, falls back
+        /// to full invalidation via <see cref="Invalidate"/>.
+        /// </summary>
+        /// <param name="tableName">The table name to match. Null/empty triggers full invalidation.</param>
+        void InvalidateTable(string tableName);
+
         /// <summary>Total number of cache hits since creation. Used for monitoring.</summary>
         long Hits { get; }
 

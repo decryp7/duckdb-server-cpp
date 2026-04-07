@@ -427,6 +427,83 @@ namespace DuckDbServer
         }
 
         /// <summary>
+        /// Extracts the first table name from a DML/DDL SQL statement.
+        /// Returns empty string if unable to parse (triggers full cache invalidation).
+        /// Handles: INSERT INTO, UPDATE, DELETE FROM, CREATE/DROP/ALTER TABLE.
+        /// </summary>
+        private static string ExtractTableName(string sql)
+        {
+            if (string.IsNullOrEmpty(sql)) return "";
+            int i = 0;
+            int len = sql.Length;
+
+            // Skip whitespace
+            while (i < len && char.IsWhiteSpace(sql[i])) i++;
+
+            // Case-insensitive keyword match with word boundary check
+            bool MatchKw(string kw)
+            {
+                int klen = kw.Length;
+                if (i + klen > len) return false;
+                if (string.Compare(sql, i, kw, 0, klen, StringComparison.OrdinalIgnoreCase) != 0) return false;
+                if (i + klen < len && !char.IsWhiteSpace(sql[i + klen])) return false;
+                i += klen;
+                return true;
+            }
+
+            void SkipWs() { while (i < len && char.IsWhiteSpace(sql[i])) i++; }
+
+            if (MatchKw("INSERT"))
+            {
+                SkipWs();
+                if (!MatchKw("INTO")) return "";
+            }
+            else if (MatchKw("UPDATE"))
+            {
+                // table name follows directly
+            }
+            else if (MatchKw("DELETE"))
+            {
+                SkipWs();
+                if (!MatchKw("FROM")) return "";
+            }
+            else if (MatchKw("CREATE") || MatchKw("DROP") || MatchKw("ALTER"))
+            {
+                SkipWs();
+                if (!MatchKw("TABLE")) return "";
+                // Skip optional IF [NOT] EXISTS
+                SkipWs();
+                if (MatchKw("IF"))
+                {
+                    SkipWs();
+                    MatchKw("NOT"); // optional
+                    SkipWs();
+                    MatchKw("EXISTS");
+                }
+            }
+            else
+            {
+                return ""; // Unknown statement — full invalidation
+            }
+
+            // Skip whitespace before table name
+            SkipWs();
+
+            // Extract table name (handle quoted identifiers)
+            int start = i;
+            if (i < len && sql[i] == '"')
+            {
+                i++;
+                while (i < len && sql[i] != '"') i++;
+                if (i < len) i++; // skip closing quote
+                return (i - start >= 2) ? sql.Substring(start + 1, i - start - 2) : "";
+            }
+            while (i < len && !char.IsWhiteSpace(sql[i]) && sql[i] != '(' && sql[i] != ';') i++;
+            if (i == start) return "";
+            return sql.Substring(start, i - start);
+        }
+
+        /// <summary>
         /// Handles a write (DML or DDL) request from a gRPC client.
         ///
         /// <para><b>Flow:</b></para>
@@ -481,8 +558,8 @@ namespace DuckDbServer
                 return Task.FromResult(new ExecuteResponse { Success = false, Error = result.Error });
             }
 
-            // Invalidate the entire cache after any write to prevent stale reads.
-            queryCache.Invalidate();
+            // Invalidate cache entries related to the affected table.
+            queryCache.InvalidateTable(ExtractTableName(sql));
             Interlocked.Increment(ref queriesWrite);
             return Task.FromResult(new ExecuteResponse { Success = true });
         }
@@ -543,7 +620,7 @@ namespace DuckDbServer
                         Interlocked.Increment(ref errors);
                         return Task.FromResult(new BulkInsertResponse { Success = false, Error = result.Error });
                     }
-                    queryCache.Invalidate();
+                    queryCache.InvalidateTable(table);
                     Interlocked.Increment(ref queriesWrite);
                     return Task.FromResult(new BulkInsertResponse { Success = true, RowsInserted = rowCount });
                 }
@@ -566,7 +643,7 @@ namespace DuckDbServer
                     }
                 }
 
-                queryCache.Invalidate();
+                queryCache.InvalidateTable(table);
                 Interlocked.Increment(ref queriesWrite);
                 return Task.FromResult(new BulkInsertResponse
                     { Success = true, RowsInserted = rowCount });

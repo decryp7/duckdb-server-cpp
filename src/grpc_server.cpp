@@ -51,6 +51,64 @@ static std::string quote_ident(const std::string& name) {
     return q;
 }
 
+/// Extract the first table name from a DML/DDL SQL statement.
+/// Returns empty string if unable to parse (triggers full invalidation).
+static std::string extract_table_name(const std::string& sql) {
+    size_t i = 0;
+    // Skip whitespace
+    while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+
+    // Match keyword helper: case-insensitive, expects uppercase kw, checks word boundary.
+    auto match_kw = [&](const char* kw) -> bool {
+        size_t len = std::strlen(kw);
+        if (i + len > sql.size()) return false;
+        for (size_t j = 0; j < len; ++j)
+            if (std::toupper(static_cast<unsigned char>(sql[i+j])) != kw[j]) return false;
+        if (i + len < sql.size() && !std::isspace(static_cast<unsigned char>(sql[i+len]))) return false;
+        i += len;
+        return true;
+    };
+
+    if (match_kw("INSERT")) {
+        while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+        if (!match_kw("INTO")) return "";
+    } else if (match_kw("UPDATE")) {
+        // table name follows directly
+    } else if (match_kw("DELETE")) {
+        while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+        if (!match_kw("FROM")) return "";
+    } else if (match_kw("CREATE") || match_kw("DROP") || match_kw("ALTER")) {
+        while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+        if (!match_kw("TABLE")) return "";
+        // Skip optional IF [NOT] EXISTS
+        while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+        if (match_kw("IF")) {
+            while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+            match_kw("NOT"); // optional
+            while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+            match_kw("EXISTS");
+        }
+    } else {
+        return ""; // Unknown statement — full invalidation
+    }
+
+    // Skip whitespace before table name
+    while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+
+    // Extract table name (handle quoted identifiers)
+    size_t start = i;
+    if (i < sql.size() && sql[i] == '"') {
+        ++i;
+        while (i < sql.size() && sql[i] != '"') ++i;
+        if (i < sql.size()) ++i; // skip closing quote
+        return (i - start >= 2) ? sql.substr(start + 1, i - start - 2) : "";
+    }
+    while (i < sql.size() && !std::isspace(static_cast<unsigned char>(sql[i]))
+           && sql[i] != '(' && sql[i] != ';') ++i;
+    if (i == start) return "";
+    return sql.substr(start, i - start);
+}
+
 /// Returns true if SQL is a simple INSERT (not INSERT ... SELECT, not INSERT OR REPLACE, etc.)
 static bool is_simple_insert(const std::string& sql) {
     size_t i = 0;
@@ -739,7 +797,7 @@ grpc::Status DuckGrpcServer::Execute(
         response->set_error(wr.error);
         return grpc::Status::OK;
     }
-    cache_.invalidate();
+    cache_.invalidate_table(extract_table_name(request->sql()));
     stat_queries_write_.fetch_add(1);
     response->set_success(true);
     return grpc::Status::OK;
@@ -906,7 +964,7 @@ grpc::Status DuckGrpcServer::BulkInsert(
                 response->set_error(wr.error);
                 return grpc::Status::OK;
             }
-            cache_.invalidate();
+            cache_.invalidate_table(table);
             stat_queries_write_.fetch_add(1);
             response->set_success(true);
             response->set_rows_inserted(row_count);
@@ -1007,7 +1065,7 @@ grpc::Status DuckGrpcServer::BulkInsert(
             duckdb_appender_destroy(&appender);
         }
 
-        cache_.invalidate();
+        cache_.invalidate_table(table);
         stat_queries_write_.fetch_add(1);
         response->set_success(true);
         response->set_rows_inserted(row_count);

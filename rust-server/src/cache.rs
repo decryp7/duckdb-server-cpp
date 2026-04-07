@@ -76,6 +76,16 @@ impl QueryCache {
         self.entries.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
+    /// Invalidate only cache entries whose SQL key contains the given table name
+    /// (case-insensitive substring match). If table_name is empty, falls back to
+    /// full invalidation.
+    pub fn invalidate_table(&self, table_name: &str) {
+        if table_name.is_empty() { self.invalidate(); return; }
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let lower = table_name.to_ascii_lowercase();
+        map.retain(|key, _| !key.to_ascii_lowercase().contains(&lower));
+    }
+
     pub fn hits(&self) -> u64 { self.hits.load(Ordering::Relaxed) }
     pub fn misses(&self) -> u64 { self.misses.load(Ordering::Relaxed) }
 }
