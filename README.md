@@ -95,8 +95,9 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | **Parallel write fan-out** | std::async (C++), Task.Run (C#), thread::scope (Rust) |
 | **Server GC** | .NET server GC mode (1 thread per CPU core) |
 | **Table-level cache** | Write invalidates only affected table's cache entries |
-| **Hybrid sharding** | File DB backup + N memory shards for reads (5-10x faster) |
+| **Hybrid sharding** | `--backup-db`: file backup + memory reads (for write-heavy / >RAM data) |
 | **Memory eviction** | LRU eviction drops cold tables from memory, fallback to file DB |
+| **Buffer pool tuning** | `--memory-limit 12GB`: large buffer pool = same read speed as :memory: |
 | **gRPC tuning** | 200 max streams, 2MB write buffer, keepalive, thread limiter |
 
 ---

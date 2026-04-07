@@ -425,30 +425,63 @@ collection on a background thread (reduces pause times from ~100ms to ~10ms).
 
 ## Recommended Configurations
 
-### Read-Heavy (analytics dashboard, many concurrent readers)
+### Decision Tree: Which Mode to Use
+
+```
+Is your data persistent (survives restart)?
+  ├─ NO  → Use :memory:  (fastest, no fsync, no disk)
+  │        --db :memory: --shards 4-8 --readers 64-128
+  │
+  └─ YES → Does your data fit in RAM?
+            ├─ YES → Use file DB with large buffer pool (simplest)
+            │        --db data.duckdb --shards 4 --memory-limit 12GB
+            │        DuckDB caches all pages in RAM → same speed as :memory: for reads
+            │
+            └─ NO  → Is write latency critical?
+                     ├─ YES → Use hybrid mode (file backup + memory reads)
+                     │        --backup-db data.duckdb --shards 4 --memory-limit 8GB
+                     │        Reads: memory only (no disk). Writes: 1 fsync (not N).
+                     │
+                     └─ NO  → Use file DB with moderate buffer pool
+                              --db data.duckdb --shards 2-4 --memory-limit 8GB
+```
+
+### Why Buffer Pool First, Hybrid Second
+
+DuckDB's buffer manager caches frequently-accessed pages in RAM. When the buffer
+pool is large enough to hold your entire dataset, file DB reads are as fast as
+memory DB reads — every page is already cached, no disk I/O occurs.
+
+```
+File DB + 12GB buffer pool + 8GB data:
+  → All pages fit in buffer pool → zero disk reads → same as :memory:
+
+File DB + 4GB buffer pool + 8GB data:
+  → Only 50% cached → frequent page evictions → disk I/O on cold queries
+  → THIS is where hybrid mode helps
+```
+
+Hybrid mode's real advantages over buffer pool:
+1. **Write speed**: memory shards skip fsync entirely (file DB: 5-50ms per COMMIT)
+2. **No checkpoint pauses**: memory shards never checkpoint (file DB: stop-the-world)
+3. **Guaranteed no page faults**: all data always in RAM (buffer pool can evict hot pages under memory pressure)
+
+### Configuration Examples
 
 ```bash
-# In-memory, 8 shards for maximum read parallelism
+# RECOMMENDED: Persistent data that fits in RAM — just use large buffer pool
+--db data.duckdb --shards 4 --readers 64 --memory-limit 12GB --batch-ms 1
+
+# Read-heavy analytics (no persistence needed)
 --db :memory: --shards 8 --readers 128 --batch-ms 1 --batch-max 64
-```
 
-### Write-Heavy (event ingestion, ETL pipeline)
-
-```bash
-# File DB, 1-2 shards to minimize fsync overhead
+# Write-heavy (event ingestion, ETL) — minimize fsync
 --db data.duckdb --shards 2 --readers 32 --batch-ms 5 --batch-max 512
-```
 
-### Balanced (mixed read/write workload)
+# Hybrid: data exceeds RAM or write latency is critical
+--backup-db data.duckdb --shards 4 --readers 64 --memory-limit 8GB
 
-```bash
-# File DB on SSD, 4 shards for good read/write balance
---db data.duckdb --shards 4 --readers 64 --batch-ms 1 --batch-max 64 --memory-limit 8GB
-```
-
-### Development (single user, simple testing)
-
-```bash
+# Development (single user)
 --db :memory: --shards 1 --readers 4
 ```
 
@@ -489,6 +522,12 @@ SELECT current_setting('memory_limit');
 ---
 
 ## Hybrid Sharding (`--backup-db`)
+
+> **Note:** For most workloads, a file DB with a large buffer pool (`--memory-limit`)
+> is simpler and equally fast for reads. Use hybrid mode only when:
+> - **Write latency is critical** (fsync is your bottleneck)
+> - **Data exceeds available RAM** (buffer pool can't cache everything)
+> - **Checkpoint pauses are unacceptable** (stop-the-world on file DB)
 
 ### Architecture
 
@@ -538,15 +577,15 @@ Query("SELECT * FROM cold_table")
   → result cached for future hits
 ```
 
-### Recommended Configuration
+### When to Use Hybrid vs Buffer Pool
 
-```bash
-# Hybrid mode: durable file backup + 4 fast memory shards
---backup-db data.duckdb --shards 4 --readers 64 --memory-limit 8GB
-
-# High-memory machine: more memory shards
---backup-db data.duckdb --shards 8 --readers 128 --memory-limit 16GB
-```
+| Scenario | Recommendation |
+|----------|---------------|
+| Data < 50% of RAM | File DB + large `--memory-limit` (buffer pool caches everything) |
+| Data > RAM | Hybrid `--backup-db` (memory shards for hot data, file for cold) |
+| Write-heavy + need durability | Hybrid `--backup-db` (1 fsync instead of N) |
+| Read-only analytics | File DB + large buffer pool (simplest) |
+| Max write speed, no durability | `:memory:` shards (no hybrid needed) |
 
 ---
 
