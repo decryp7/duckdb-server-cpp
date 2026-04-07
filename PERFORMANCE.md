@@ -189,10 +189,28 @@ I/O layer:
 | Cache hit | ~0.1ms (just protobuf copy + gRPC write) |
 | Cache miss | 5-500ms (DuckDB query + encode + cache store) |
 
+### Table-Level Invalidation (v5.2+)
+
+Instead of clearing the entire cache on every write, the server parses the SQL
+to extract the affected table name and only invalidates cache entries whose SQL
+key contains that table name (case-insensitive substring match):
+
+```
+Execute("INSERT INTO events VALUES (1, 'click')")
+  → extract_table_name → "events"
+  → cache.invalidate_table("events")
+  → removes: "SELECT * FROM events WHERE ...", "SELECT count(*) FROM events"
+  → keeps:   "SELECT * FROM users WHERE ...", "SELECT * FROM products"
+```
+
+Supported SQL patterns: `INSERT INTO`, `UPDATE`, `DELETE FROM`,
+`CREATE/DROP/ALTER TABLE [IF [NOT] EXISTS]`. Unknown patterns fall back
+to full invalidation (safe).
+
 ### Limitations
 
 - **No parameterized caching:** `SELECT * FROM t WHERE id=1` and `SELECT * FROM t WHERE id=2` are different cache keys.
-- **Full invalidation:** Any write clears all cache entries. Table-level invalidation would require SQL parsing.
+- **Substring match over-invalidation:** Table name "users" also invalidates queries mentioning "users_archive". Safe but imprecise.
 - **Memory:** Large result sets consume cache memory. 10,000 entries × 1MB avg = ~10GB worst case.
 
 ---
@@ -630,14 +648,15 @@ All major optimizations from the research phase have been implemented:
 | **Late materialization** | All 3 (1000 rows) | Done — faster LIMIT queries |
 | **Allocator flush threshold** | All 3 (128MB) | Done |
 | **Temp directory config** | All 3 (--temp-dir) | Done |
+| **Table-level cache invalidation** | All 3 (extract_table_name → invalidate_table) | Done — less cache churn |
+| **gRPC ResourceQuota** | C++ (hw × 4 max threads) | Done — prevents thread explosion |
 
 ## Remaining Future Opportunities
 
 | Improvement | Expected Gain | Why Not Yet |
 |-------------|--------------|-------------|
-| **gRPC async/callback service** | Better scaling at 1000+ concurrent | Requires full C++ server rewrite |
-| **Arrow IPC for C++ server** | Zero-copy (already done in Rust) | Needs Arrow C++ library linkage |
-| **Table-level cache invalidation** | Less cache churn on writes | Requires SQL parsing to identify affected tables |
+| **gRPC async/callback service** | Better scaling at 1000+ concurrent | Requires full C++ server rewrite; mitigated by ResourceQuota thread limiter |
+| **Arrow IPC for C++ server** | Zero-copy (already done in Rust) | Requires Arrow C++ library (libarrow) linkage; Rust server provides this |
 
 ### Why Not FlatBuffers?
 
