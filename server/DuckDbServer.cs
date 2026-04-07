@@ -241,6 +241,27 @@ namespace DuckDbServer
             catch (OperationCanceledException) { throw; } // Let gRPC handle client cancellation
             catch (Exception ex)
             {
+                // Hybrid mode fallback: if query fails on memory shard (e.g. table was evicted),
+                // retry on the file backup shard which has all tables.
+                if (shardedDb.IsHybridMode && ex.Message != null
+                    && (ex.Message.Contains("does not exist") || ex.Message.Contains("not found")))
+                {
+                    try
+                    {
+                        var fileShard = shardedDb.FileShard;
+                        if (fileShard != null)
+                        {
+                            var fallbackTask = ExecuteQuery(fileShard, sql, responseStream, context);
+                            var fallbackResponses = await fallbackTask;
+                            if (fallbackResponses != null)
+                                queryCache.Put(sql, fallbackResponses);
+                            Interlocked.Increment(ref queriesRead);
+                            return; // Fallback succeeded
+                        }
+                    }
+                    catch { /* fallback also failed — report original error */ }
+                }
+
                 Interlocked.Increment(ref errors);
                 throw new RpcException(new Status(StatusCode.Internal, ex.Message));
             }

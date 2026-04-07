@@ -63,6 +63,17 @@ namespace DuckDbServer
         /// </summary>
         private readonly int readStartIndex;
 
+        /// <summary>Whether hybrid mode is active (file backup + memory shards).</summary>
+        private readonly bool hybridMode;
+
+        /// <summary>
+        /// Table access tracker for LRU eviction in hybrid mode.
+        /// Key: lowercase table name, Value: last access time (UTC ticks).
+        /// Only populated in hybrid mode.
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> tableAccessTimes
+            = new System.Collections.Concurrent.ConcurrentDictionary<string, long>();
+
         /// <summary>Number of shards (always >= 1).</summary>
         public int ShardCount { get { return shards.Length; } }
 
@@ -92,7 +103,7 @@ namespace DuckDbServer
         /// </remarks>
         public ShardedDuckDb(ServerConfig config)
         {
-            bool hybridMode = !string.IsNullOrEmpty(config.BackupDbPath);
+            this.hybridMode = !string.IsNullOrEmpty(config.BackupDbPath);
             int memoryShardCount = Math.Max(1, config.Shards);
             int totalShardCount = hybridMode ? memoryShardCount + 1 : memoryShardCount;
             readStartIndex = hybridMode ? 1 : 0;
@@ -376,6 +387,94 @@ namespace DuckDbServer
             }
 
             Console.WriteLine("[das] Hybrid sync: complete");
+        }
+
+        // ── Hybrid mode: fallback + eviction ────────────────────────────────
+
+        /// <summary>Whether hybrid mode is active (file backup shard at index 0).</summary>
+        public bool IsHybridMode { get { return hybridMode; } }
+
+        /// <summary>
+        /// Get the file backup shard (shard 0) for fallback reads in hybrid mode.
+        /// Returns null if not in hybrid mode.
+        /// </summary>
+        public Shard FileShard { get { return hybridMode ? shards[0] : null; } }
+
+        /// <summary>
+        /// Record that a table was accessed (for LRU eviction tracking).
+        /// Called by the Query handler on every successful query.
+        /// </summary>
+        public void TouchTable(string tableName)
+        {
+            if (!hybridMode || string.IsNullOrEmpty(tableName)) return;
+            tableAccessTimes[tableName.ToLowerInvariant()] = DateTime.UtcNow.Ticks;
+        }
+
+        /// <summary>
+        /// Check memory usage on memory shards and evict cold tables if over threshold.
+        /// In hybrid mode, evicted tables still exist on the file DB for fallback reads.
+        ///
+        /// Call this periodically (e.g. after every N writes) or when memory pressure is detected.
+        /// </summary>
+        /// <param name="maxTablesPerShard">Maximum tables to keep in each memory shard. 0 = no limit.</param>
+        public void EvictColdTables(int maxTablesPerShard = 0)
+        {
+            if (!hybridMode || maxTablesPerShard <= 0) return;
+
+            for (int s = readStartIndex; s < shards.Length; s++)
+            {
+                try
+                {
+                    // Get table list and sizes from this memory shard
+                    var tables = new System.Collections.Generic.List<string>();
+                    using (var handle = shards[s].Pool.Borrow())
+                    using (var cmd = handle.Connection.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT table_name FROM information_schema.tables WHERE table_schema='main'";
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                                tables.Add(reader.GetString(0));
+                        }
+                    }
+
+                    if (tables.Count <= maxTablesPerShard) continue;
+
+                    // Sort by access time (oldest first) — evict coldest tables
+                    tables.Sort((a, b) =>
+                    {
+                        long timeA, timeB;
+                        tableAccessTimes.TryGetValue(a.ToLowerInvariant(), out timeA);
+                        tableAccessTimes.TryGetValue(b.ToLowerInvariant(), out timeB);
+                        return timeA.CompareTo(timeB);
+                    });
+
+                    // Drop oldest tables until we're under the limit
+                    int toDrop = tables.Count - maxTablesPerShard;
+                    for (int d = 0; d < toDrop; d++)
+                    {
+                        string table = tables[d];
+                        try
+                        {
+                            using (var handle = shards[s].Pool.Borrow())
+                            using (var cmd = handle.Connection.CreateCommand())
+                            {
+                                cmd.CommandText = "DROP TABLE IF EXISTS \"" + table.Replace("\"", "\"\"") + "\"";
+                                cmd.ExecuteNonQuery();
+                            }
+                            Console.WriteLine("[das] Evicted table '{0}' from memory shard {1} (cold, still on file DB)", table, s);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine("[das] Evict failed for '{0}' on shard {1}: {2}", table, s, ex.Message);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine("[das] Eviction check failed on shard {0}: {1}", s, ex.Message);
+                }
+            }
         }
 
         /// <summary>
