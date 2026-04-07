@@ -36,7 +36,7 @@ namespace DuckDbBenchmark
             }
 
             Console.WriteLine("==========================================================================");
-            Console.WriteLine("  DuckDB gRPC Server v5.2 — Performance Benchmark");
+            Console.WriteLine("  DuckDB gRPC Server v5.4 — Performance Benchmark");
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
             Console.WriteLine("  Target server  : {0}:{1}", host, port);

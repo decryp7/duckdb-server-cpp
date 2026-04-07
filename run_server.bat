@@ -39,6 +39,7 @@ REM  Usage:
 REM    run_server.bat                         Launch with defaults below
 REM    run_server.bat --db :memory:           In-memory mode (fastest, no persistence)
 REM    run_server.bat --readers 256           More concurrent readers
+REM    run_server.bat --backup-db data.duckdb Hybrid mode: file backup + memory reads (5-10x)
 REM
 REM  Stop: Press Ctrl+C
 REM ============================================================================

@@ -19,6 +19,7 @@ REM  Usage:
 REM    run_cpp_server.bat
 REM    run_cpp_server.bat --db C:\data\analytics.duckdb
 REM    run_cpp_server.bat --port 9000 --readers 32
+REM    run_cpp_server.bat --backup-db data.duckdb    Hybrid mode: file backup + memory reads
 REM
 REM  Stop: Press Ctrl+C in this window
 REM ============================================================================

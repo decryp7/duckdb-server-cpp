@@ -739,6 +739,7 @@ destroyed automatically when the chunk is done processing.
 | `--memory-limit` | auto | DuckDB memory limit (auto: 80%/shards, or e.g. "8GB") |
 | `--threads` | `1` | DuckDB threads per connection |
 | `--timeout` | `30` | Query timeout (seconds, C# only) |
+| `--backup-db` | — | Hybrid mode: file DB for durable backup + memory reads |
 | `--temp-dir` | — | Temp directory for DuckDB spill-to-disk |
 | `--tls-cert` | — | TLS certificate PEM path |
 | `--tls-key` | — | TLS private key PEM path |
@@ -749,8 +750,11 @@ destroyed automatically when the chunk is done processing.
 # High-throughput read-heavy workload (8-core machine)
 --shards 8 --readers 128 --batch-ms 1 --batch-max 64 --memory-limit 8GB
 
+# Hybrid mode: durable file backup + fast memory reads (5-10x)
+--backup-db data.duckdb --shards 4 --readers 64 --memory-limit 8GB
+
 # Write-heavy workload
---shards 2 --readers 32 --batch-ms 10 --batch-max 1024
+--shards 2 --readers 32 --batch-ms 5 --batch-max 512
 
 # Single-user development
 --shards 1 --readers 4
