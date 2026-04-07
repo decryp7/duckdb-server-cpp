@@ -52,7 +52,7 @@ impl ShardedDuckDb {
             let pool = Arc::new(ConnectionPool::new(&path, readers_per_shard)?);
 
             let writer = {
-                let conn = pool.borrow().map_err(|e| e)?;
+                let conn = pool.borrow()?;
                 // Apply database-wide settings (affect all connections on this database).
                 // memory_limit prevents N shards each claiming 80% RAM.
                 if shard_count > 1 {
@@ -73,7 +73,7 @@ impl ShardedDuckDb {
             // Dedicated bulk connection for BulkInsert — bypasses WriteSerializer
             // queue/batch overhead for direct SQL execution on each shard.
             let bulk_conn = {
-                let conn = pool.borrow().map_err(|e| e)?;
+                let conn = pool.borrow()?;
                 let cloned = conn.try_clone().map_err(|e| format!("Bulk clone: {}", e))?;
                 let _ = cloned.execute_batch("SET threads=1");
                 let _ = cloned.execute_batch("SET preserve_insertion_order=false");
@@ -125,7 +125,7 @@ impl ShardedDuckDb {
     /// Used by BulkInsert for lower latency (no queue wait, no transaction batching).
     pub fn bulk_execute_all(&self, sql: &str) -> Result<(), String> {
         if self.shards.len() == 1 {
-            let conn = self.shards[0].bulk_conn.lock().unwrap();
+            let conn = self.shards[0].bulk_conn.lock().unwrap_or_else(|e| e.into_inner());
             return conn.execute_batch(sql).map_err(|e| format!("Bulk exec: {}", e));
         }
 
@@ -133,7 +133,7 @@ impl ShardedDuckDb {
         let results: Vec<_> = std::thread::scope(|s| {
             let handles: Vec<_> = self.shards.iter().map(|shard| {
                 s.spawn(|| {
-                    let conn = shard.bulk_conn.lock().unwrap();
+                    let conn = shard.bulk_conn.lock().unwrap_or_else(|e| e.into_inner());
                     conn.execute_batch(sql).map_err(|e| format!("Bulk exec: {}", e))
                 })
             }).collect();

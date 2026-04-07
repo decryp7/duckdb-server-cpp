@@ -14,20 +14,6 @@
 //!
 //! Each caller blocks on a `mpsc::Receiver` until its write completes.
 //! Timeout is 30 seconds — if the writer thread dies, callers don't hang forever.
-//!
-//! ## from_conn(): Two try_clone() Calls
-//!
-//! The source connection is cloned twice:
-//! - `write_conn`: used by the background drain_loop for batched DML/DDL.
-//! - `bulk_conn`: used by the legacy bulk_insert method (now dead code since
-//!   BulkInsert routes through build_bulk_insert_sql + write_to_all).
-//!
-//! ## build_bulk_insert_sql(): Standalone Function
-//!
-//! Builds a multi-row INSERT SQL string from columnar protobuf data.
-//! Used by the BulkInsert RPC handler in main.rs to route through write_to_all()
-//! for thread-safe shard fan-out. Handles type dispatch, NULL values, and
-//! single-quote escaping for SQL string safety.
 
 use crate::proto::{ColumnData, ColumnMeta};
 use duckdb::Connection;
@@ -43,17 +29,14 @@ struct WriteRequest {
 
 pub struct WriteSerializer {
     request_tx: Mutex<mpsc::Sender<WriteRequest>>,
-    bulk_conn: Mutex<Connection>,
     _writer_thread: thread::JoinHandle<()>,
 }
 
 impl WriteSerializer {
-    /// Create a writer. `source_conn` is cloned for the writer's own connections.
+    /// Create a writer. `source_conn` is cloned for the writer's dedicated connection.
     pub fn from_conn(source_conn: &Connection, batch_ms: u64, batch_max: usize) -> Result<Self, String> {
         let write_conn = source_conn.try_clone()
             .map_err(|e| format!("Writer clone failed: {}", e))?;
-        let bulk_conn = source_conn.try_clone()
-            .map_err(|e| format!("Bulk clone failed: {}", e))?;
 
         let (tx, rx) = mpsc::channel::<WriteRequest>();
 
@@ -64,49 +47,18 @@ impl WriteSerializer {
 
         Ok(Self {
             request_tx: Mutex::new(tx),
-            bulk_conn: Mutex::new(bulk_conn),
             _writer_thread: handle,
         })
     }
 
     pub fn submit(&self, sql: &str) -> Result<(), String> {
         let (result_tx, result_rx) = mpsc::channel();
-        self.request_tx.lock().unwrap()
+        // Use unwrap_or_else to recover from mutex poisoning instead of panicking
+        self.request_tx.lock().unwrap_or_else(|e| e.into_inner())
             .send(WriteRequest { sql: sql.to_string(), result_tx })
             .map_err(|_| "Writer thread died".to_string())?;
         result_rx.recv_timeout(Duration::from_secs(30))
             .map_err(|_| "Write timed out".to_string())?
-    }
-
-    /// Optimization 6: Appender API — bypasses SQL parser entirely (10-100x faster)
-    pub fn bulk_insert(&self, table: &str, _columns: &[ColumnMeta], data: &[ColumnData], row_count: usize) -> Result<usize, String> {
-        let conn = self.bulk_conn.lock().unwrap();
-        let col_count = data.len();
-        if col_count == 0 || row_count == 0 { return Ok(0); }
-
-        // Use SQL INSERT as fallback (Appender API varies across duckdb crate versions)
-        let col_count = data.len();
-        if col_count == 0 || row_count == 0 { return Ok(0); }
-        let mut sql = format!("INSERT INTO {} VALUES ", table);
-        for r in 0..row_count {
-            if r > 0 { sql.push_str(", "); }
-            sql.push('(');
-            for c in 0..col_count {
-                if c > 0 { sql.push_str(", "); }
-                let cd = &data[c];
-                if cd.null_indices.contains(&(r as i32)) { sql.push_str("NULL"); }
-                else if r < cd.int32_values.len() { sql.push_str(&cd.int32_values[r].to_string()); }
-                else if r < cd.int64_values.len() { sql.push_str(&cd.int64_values[r].to_string()); }
-                else if r < cd.double_values.len() { sql.push_str(&cd.double_values[r].to_string()); }
-                else if r < cd.bool_values.len() { sql.push_str(if cd.bool_values[r] { "true" } else { "false" }); }
-                else if r < cd.string_values.len() {
-                    sql.push('\''); sql.push_str(&cd.string_values[r].replace('\'', "''")); sql.push('\'');
-                } else { sql.push_str("NULL"); }
-            }
-            sql.push(')');
-        }
-        conn.execute_batch(&sql).map_err(|e| format!("Bulk insert: {}", e))?;
-        Ok(row_count)
     }
 }
 

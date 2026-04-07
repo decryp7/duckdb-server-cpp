@@ -100,7 +100,7 @@ impl DuckDbService for DuckDbServerImpl {
             self.stat_reads.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = tokio::sync::mpsc::channel(cached.len() + 1);
             for resp in cached {
-                let _ = tx.send(Ok(resp)).await;
+                if tx.send(Ok(resp)).await.is_err() { break; } // client disconnected
             }
             return Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)));
         }

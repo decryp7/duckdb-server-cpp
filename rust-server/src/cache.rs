@@ -42,7 +42,7 @@ impl QueryCache {
     }
 
     pub fn get(&self, sql: &str) -> Option<Vec<QueryResponse>> {
-        let map = self.entries.lock().unwrap();
+        let map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = map.get(sql) {
             if entry.created_at.elapsed() < self.ttl {
                 self.hits.fetch_add(1, Ordering::Relaxed);
@@ -54,7 +54,7 @@ impl QueryCache {
     }
 
     pub fn put(&self, sql: String, responses: Vec<QueryResponse>) {
-        let mut map = self.entries.lock().unwrap();
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if map.len() >= self.max_entries {
             // Evict expired entries
             let now = Instant::now();
@@ -70,7 +70,7 @@ impl QueryCache {
 
     /// Invalidate all entries (called after writes).
     pub fn invalidate(&self) {
-        self.entries.lock().unwrap().clear();
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     pub fn hits(&self) -> u64 { self.hits.load(Ordering::Relaxed) }
