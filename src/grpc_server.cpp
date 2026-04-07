@@ -667,26 +667,23 @@ grpc::Status DuckGrpcServer::GetStats(
     return grpc::Status::OK;
 }
 
-// ─── BulkInsert: build INSERT SQL and route through write_to_all ─────────────
+// ─── BulkInsert: Appender API for direct columnar insertion ─────────────────
 
 /**
- * @brief Bulk insert columnar data by building a multi-row INSERT and routing
- *        through write_to_all for thread-safe shard fan-out.
+ * @brief Bulk insert columnar data using DuckDB's Appender API.
  *
- * Why SQL instead of Appender API:
- *   The DuckDB Appender API (duckdb_appender_create) requires direct access to a
- *   duckdb_connection. The WriteSerializer's background thread also uses its connection
- *   concurrently. Since DuckDB connections are NOT thread-safe, using the Appender
- *   directly would race with the writer thread. Building SQL and routing through
- *   write_to_all() serializes access through the writer thread, avoiding the race.
+ * The Appender API bypasses SQL parsing entirely (10-100x faster than building
+ * INSERT SQL strings).  Each shard has a dedicated bulk_conn protected by a
+ * mutex for thread safety, separate from the writer_conn used by WriteSerializer.
  *
- * SQL construction:
- *   Builds: INSERT INTO <table> VALUES (v1,v2,...), (v3,v4,...), ...
- *   - Type dispatch per column: bool→true/false, int→to_string, float→to_string,
- *     string→single-quote escaped ('O''Brien'), NULL→NULL literal.
- *   - Single-quote escaping: ' → '' (SQL standard escape).
+ * Flow per shard:
+ *   1. Lock shard.bulk_mu
+ *   2. Create appender on shard.bulk_conn for the target table
+ *   3. Append all rows with type-dispatched duckdb_append_* calls
+ *   4. Flush and destroy the appender
+ *   5. Unlock
  *
- * After successful write, cache is fully invalidated.
+ * After all shards complete successfully, the query cache is invalidated.
  */
 grpc::Status DuckGrpcServer::BulkInsert(
     grpc::ServerContext*,
@@ -710,73 +707,98 @@ grpc::Status DuckGrpcServer::BulkInsert(
     }
 
     try {
-        // Build multi-row INSERT SQL from columnar protobuf data.
-        // Uses write_to_all() to route through each shard's WriteSerializer,
-        // avoiding thread-safety issues with direct writer_conn access.
-        std::string sql;
-        sql.reserve(row_count * col_count * 10);
+        // Appender API: bypasses SQL parser entirely (10-100x faster than INSERT SQL).
+        // Uses dedicated bulk_conn per shard with mutex for thread safety.
+        for (auto& shard_ptr : shards_) {
+            auto& shard = *shard_ptr;
+            std::lock_guard<std::mutex> lock(shard.bulk_mu);
 
-        for (int r = 0; r < row_count; ++r) {
-            if (r == 0) { sql += "INSERT INTO "; sql += table; sql += " VALUES ("; }
-            else { sql += ", ("; }
+            duckdb_appender appender = nullptr;
+            if (duckdb_appender_create(shard.bulk_conn, nullptr, table.c_str(), &appender) == DuckDBError) {
+                std::string err = "Appender creation failed for table: " + table;
+                const char* ae = duckdb_appender_error(appender);
+                if (ae) err = ae;
+                duckdb_appender_destroy(&appender);
+                response->set_success(false);
+                response->set_error(err);
+                stat_errors_.fetch_add(1);
+                return grpc::Status::OK;
+            }
 
-            for (int c = 0; c < col_count; ++c) {
-                if (c > 0) sql += ", ";
-                const auto& cd = request->data(c);
+            for (int r = 0; r < row_count; ++r) {
+                for (int c = 0; c < col_count; ++c) {
+                    const auto& cd = request->data(c);
 
-                bool is_null = false;
-                for (int n = 0; n < cd.null_indices_size(); ++n) {
-                    if (cd.null_indices(n) == r) { is_null = true; break; }
-                }
+                    bool is_null = false;
+                    for (int n = 0; n < cd.null_indices_size(); ++n) {
+                        if (cd.null_indices(n) == r) { is_null = true; break; }
+                    }
 
-                if (is_null) { sql += "NULL"; continue; }
+                    if (is_null) {
+                        duckdb_append_null(appender);
+                        continue;
+                    }
 
-                switch (request->columns(c).type()) {
-                    case duckdb::v1::TYPE_BOOLEAN:
-                        sql += (r < cd.bool_values_size() && cd.bool_values(r)) ? "true" : "false";
-                        break;
-                    case duckdb::v1::TYPE_INT8:
-                    case duckdb::v1::TYPE_INT16:
-                    case duckdb::v1::TYPE_INT32:
-                    case duckdb::v1::TYPE_UINT8:
-                    case duckdb::v1::TYPE_UINT16:
-                        sql += std::to_string(r < cd.int32_values_size() ? cd.int32_values(r) : 0);
-                        break;
-                    case duckdb::v1::TYPE_INT64:
-                    case duckdb::v1::TYPE_UINT32:
-                    case duckdb::v1::TYPE_UINT64:
-                        sql += std::to_string(r < cd.int64_values_size() ? cd.int64_values(r) : 0);
-                        break;
-                    case duckdb::v1::TYPE_FLOAT:
-                        sql += std::to_string(r < cd.float_values_size() ? cd.float_values(r) : 0.0f);
-                        break;
-                    case duckdb::v1::TYPE_DOUBLE:
-                    case duckdb::v1::TYPE_DECIMAL:
-                        sql += std::to_string(r < cd.double_values_size() ? cd.double_values(r) : 0.0);
-                        break;
-                    default: {
-                        sql += "'";
-                        if (r < cd.string_values_size()) {
-                            const std::string& sv = cd.string_values(r);
-                            for (size_t i = 0; i < sv.size(); ++i) {
-                                if (sv[i] == '\'') sql += "''";
-                                else sql += sv[i];
-                            }
-                        }
-                        sql += "'";
-                        break;
+                    switch (request->columns(c).type()) {
+                        case duckdb::v1::TYPE_BOOLEAN:
+                            duckdb_append_bool(appender, r < cd.bool_values_size() ? cd.bool_values(r) : false);
+                            break;
+                        case duckdb::v1::TYPE_INT8:
+                            duckdb_append_int8(appender, r < cd.int32_values_size() ? static_cast<int8_t>(cd.int32_values(r)) : 0);
+                            break;
+                        case duckdb::v1::TYPE_INT16:
+                            duckdb_append_int16(appender, r < cd.int32_values_size() ? static_cast<int16_t>(cd.int32_values(r)) : 0);
+                            break;
+                        case duckdb::v1::TYPE_INT32:
+                        case duckdb::v1::TYPE_UINT8:
+                        case duckdb::v1::TYPE_UINT16:
+                            duckdb_append_int32(appender, r < cd.int32_values_size() ? cd.int32_values(r) : 0);
+                            break;
+                        case duckdb::v1::TYPE_INT64:
+                        case duckdb::v1::TYPE_UINT32:
+                        case duckdb::v1::TYPE_UINT64:
+                            duckdb_append_int64(appender, r < cd.int64_values_size() ? cd.int64_values(r) : 0);
+                            break;
+                        case duckdb::v1::TYPE_FLOAT:
+                            duckdb_append_float(appender, r < cd.float_values_size() ? cd.float_values(r) : 0.0f);
+                            break;
+                        case duckdb::v1::TYPE_DOUBLE:
+                        case duckdb::v1::TYPE_DECIMAL:
+                            duckdb_append_double(appender, r < cd.double_values_size() ? cd.double_values(r) : 0.0);
+                            break;
+                        default:
+                            if (r < cd.string_values_size())
+                                duckdb_append_varchar(appender, cd.string_values(r).c_str());
+                            else
+                                duckdb_append_varchar(appender, "");
+                            break;
                     }
                 }
-            }
-            sql += ")";
-        }
 
-        const WriteResult wr = write_to_all(sql);
-        if (!wr.ok) {
-            stat_errors_.fetch_add(1);
-            response->set_success(false);
-            response->set_error(wr.error);
-            return grpc::Status::OK;
+                if (duckdb_appender_end_row(appender) == DuckDBError) {
+                    std::string err = "Appender row error";
+                    const char* ae = duckdb_appender_error(appender);
+                    if (ae) err = ae;
+                    duckdb_appender_destroy(&appender);
+                    response->set_success(false);
+                    response->set_error(err);
+                    stat_errors_.fetch_add(1);
+                    return grpc::Status::OK;
+                }
+            }
+
+            if (duckdb_appender_flush(appender) == DuckDBError) {
+                std::string err = "Appender flush failed";
+                const char* ae = duckdb_appender_error(appender);
+                if (ae) err = ae;
+                duckdb_appender_destroy(&appender);
+                response->set_success(false);
+                response->set_error(err);
+                stat_errors_.fetch_add(1);
+                return grpc::Status::OK;
+            }
+
+            duckdb_appender_destroy(&appender);
         }
 
         cache_.invalidate();

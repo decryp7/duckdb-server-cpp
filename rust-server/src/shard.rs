@@ -22,12 +22,16 @@
 
 use crate::pool::ConnectionPool;
 use crate::writer::WriteSerializer;
+use duckdb::Connection;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct Shard {
     pub pool: Arc<ConnectionPool>,
     pub writer: Arc<WriteSerializer>,
+    /// Dedicated connection for BulkInsert, bypassing the WriteSerializer queue.
+    /// Protected by Mutex since DuckDB connections are not thread-safe.
+    pub bulk_conn: Mutex<Connection>,
 }
 
 pub struct ShardedDuckDb {
@@ -66,7 +70,17 @@ impl ShardedDuckDb {
                 Arc::new(WriteSerializer::from_conn(&conn, batch_ms, batch_max)?)
             };
 
-            shards.push(Shard { pool, writer });
+            // Dedicated bulk connection for BulkInsert — bypasses WriteSerializer
+            // queue/batch overhead for direct SQL execution on each shard.
+            let bulk_conn = {
+                let conn = pool.borrow().map_err(|e| e)?;
+                let cloned = conn.try_clone().map_err(|e| format!("Bulk clone: {}", e))?;
+                let _ = cloned.execute_batch("SET threads=1");
+                let _ = cloned.execute_batch("SET preserve_insertion_order=false");
+                cloned
+            };
+
+            shards.push(Shard { pool, writer, bulk_conn: Mutex::new(bulk_conn) });
         }
 
         println!("[das] Sharded DuckDB (read-all / write-all):");
@@ -96,6 +110,32 @@ impl ShardedDuckDb {
         let results: Vec<_> = std::thread::scope(|s| {
             let handles: Vec<_> = self.shards.iter().map(|shard| {
                 s.spawn(|| shard.writer.submit(sql))
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        for r in results {
+            if let Err(e) = r { return Err(e); }
+        }
+        Ok(())
+    }
+
+    /// Execute SQL directly on each shard's dedicated bulk connection.
+    /// Bypasses the WriteSerializer queue/batch entirely for direct execution.
+    /// Used by BulkInsert for lower latency (no queue wait, no transaction batching).
+    pub fn bulk_execute_all(&self, sql: &str) -> Result<(), String> {
+        if self.shards.len() == 1 {
+            let conn = self.shards[0].bulk_conn.lock().unwrap();
+            return conn.execute_batch(sql).map_err(|e| format!("Bulk exec: {}", e));
+        }
+
+        // Fan-out in parallel using scoped threads
+        let results: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = self.shards.iter().map(|shard| {
+                s.spawn(|| {
+                    let conn = shard.bulk_conn.lock().unwrap();
+                    conn.execute_batch(sql).map_err(|e| format!("Bulk exec: {}", e))
+                })
             }).collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });

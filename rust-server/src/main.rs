@@ -218,12 +218,14 @@ impl DuckDbService for DuckDbServerImpl {
 
     async fn bulk_insert(&self, request: Request<BulkInsertRequest>) -> Result<Response<BulkInsertResponse>, Status> {
         let req = request.into_inner();
-        // BulkInsert: build SQL then fan-out to ALL shards via write_to_all
+        // BulkInsert: build SQL then fan-out to ALL shards via dedicated bulk connections.
+        // Uses bulk_execute_all() which bypasses the WriteSerializer queue/batch entirely,
+        // executing directly on each shard's dedicated bulk_conn for lower latency.
         let sharded = self.sharded_db.clone();
         let result = tokio::task::spawn_blocking(move || {
             let sql = crate::writer::build_bulk_insert_sql(
                 &req.table, &req.columns, &req.data, req.row_count as usize)?;
-            sharded.write_to_all(&sql)?;
+            sharded.bulk_execute_all(&sql)?;
             Ok::<usize, String>(req.row_count as usize)
         }).await.map_err(|e| Status::internal(e.to_string()))?;
         match result {
