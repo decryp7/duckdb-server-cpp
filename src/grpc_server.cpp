@@ -781,7 +781,9 @@ grpc::Status DuckGrpcServer::QueryArrow(
     grpc::ServerWriter<duckdb::v1::ArrowResponse>* writer)
 {
     return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-        "QueryArrow not available in C++ server. Use Rust server for Arrow IPC.");
+        "QueryArrow requires Arrow C++ library (libarrow). "
+        "Use the Rust server for Arrow IPC, or use the Query RPC which provides "
+        "equivalent columnar data in protobuf format with memcpy fast path.");
 }
 
 // ─── BulkInsert: Appender API for direct columnar insertion ─────────────────
