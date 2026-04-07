@@ -271,9 +271,11 @@ impl DuckDbService for DuckDbServerImpl {
 /// concurrent appends don't conflict.
 fn is_simple_insert(sql: &str) -> bool {
     let trimmed = sql.trim_start();
-    trimmed.len() >= 6
-        && trimmed[..6].eq_ignore_ascii_case("insert")
-        && (trimmed.len() == 6 || trimmed.as_bytes()[6].is_ascii_whitespace())
+    // Use get() to avoid panic on non-ASCII char boundaries
+    trimmed.get(..6)
+        .map(|prefix| prefix.eq_ignore_ascii_case("insert")
+            && (trimmed.len() == 6 || trimmed.as_bytes().get(6).map_or(true, |b| b.is_ascii_whitespace())))
+        .unwrap_or(false)
 }
 
 // ── Arrow → Protobuf conversion ─────────────────────────────────────────────
