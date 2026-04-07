@@ -243,6 +243,10 @@ namespace DuckDbServer
             {
                 // Hybrid mode fallback: if query fails on memory shard (e.g. table was evicted),
                 // retry on the file backup shard which has all tables.
+                // SAFETY: "does not exist" / "not found" errors occur during DuckDB's parse/plan
+                // phase (inside ExecuteReader), BEFORE any rows are streamed to the client.
+                // Therefore the responseStream is clean and the fallback can safely write to it.
+                // If a different error occurs mid-stream (after partial data), we do NOT retry.
                 if (shardedDb.IsHybridMode && ex.Message != null
                     && (ex.Message.Contains("does not exist") || ex.Message.Contains("not found")))
                 {
@@ -251,8 +255,7 @@ namespace DuckDbServer
                         var fileShard = shardedDb.FileShard;
                         if (fileShard != null)
                         {
-                            var fallbackTask = ExecuteQuery(fileShard, sql, responseStream, context);
-                            var fallbackResponses = await fallbackTask;
+                            var fallbackResponses = await ExecuteQuery(fileShard, sql, responseStream, context);
                             if (fallbackResponses != null)
                                 queryCache.Put(sql, fallbackResponses);
                             Interlocked.Increment(ref queriesRead);

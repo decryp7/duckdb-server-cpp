@@ -415,6 +415,10 @@ namespace DuckDbServer
         /// In hybrid mode, evicted tables still exist on the file DB for fallback reads.
         ///
         /// Call this periodically (e.g. after every N writes) or when memory pressure is detected.
+        /// <para><b>Thread safety:</b> This method is NOT safe to call concurrently with writes.
+        /// Call it during maintenance windows (e.g., low-traffic periods) or from a dedicated
+        /// maintenance endpoint. Concurrent writes during eviction may have their tables dropped
+        /// from memory shards, creating temporary inconsistency (resolved by query fallback).</para>
         /// </summary>
         /// <param name="maxTablesPerShard">Maximum tables to keep in each memory shard. 0 = no limit.</param>
         public void EvictColdTables(int maxTablesPerShard = 0)
