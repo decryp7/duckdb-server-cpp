@@ -198,6 +198,80 @@ impl DuckDbService for DuckDbServerImpl {
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
     }
 
+    async fn query_arrow(&self, request: Request<QueryRequest>) -> Result<Response<Self::QueryArrowStream>, Status> {
+        let sql = request.into_inner().sql;
+
+        let sharded = self.sharded_db.clone();
+        let stat_reads = self.stat_reads.clone();
+        let stat_errors = self.stat_errors.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+
+        tokio::task::spawn_blocking(move || {
+            let shard = sharded.next_for_read();
+            let conn = match shard.pool.borrow() {
+                Ok(c) => c,
+                Err(e) => {
+                    stat_errors.fetch_add(1, Ordering::Relaxed);
+                    let _ = tx.blocking_send(Err(Status::internal(e)));
+                    return;
+                }
+            };
+
+            let mut stmt = match conn.prepare_cached(&sql) {
+                Ok(s) => s,
+                Err(e) => {
+                    stat_errors.fetch_add(1, Ordering::Relaxed);
+                    let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                    return;
+                }
+            };
+
+            let arrow_result = match stmt.query_arrow([]) {
+                Ok(r) => r,
+                Err(e) => {
+                    stat_errors.fetch_add(1, Ordering::Relaxed);
+                    let _ = tx.blocking_send(Err(Status::internal(e.to_string())));
+                    return;
+                }
+            };
+
+            let batches: Vec<_> = arrow_result.collect();
+
+            // Send schema as first message
+            if let Some(first) = batches.first() {
+                let schema = first.schema();
+                let mut buf = Vec::new();
+                {
+                    let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+                    writer.finish().unwrap();
+                }
+                let resp = ArrowResponse { ipc_data: buf, row_count: 0 };
+                if tx.blocking_send(Ok(resp)).is_err() { return; }
+            }
+
+            // Send each batch as IPC
+            for batch in &batches {
+                let schema = batch.schema();
+                let mut buf = Vec::new();
+                {
+                    let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+                    writer.write(batch).unwrap();
+                    writer.finish().unwrap();
+                }
+                let resp = ArrowResponse {
+                    ipc_data: buf,
+                    row_count: batch.num_rows() as i32,
+                };
+                if tx.blocking_send(Ok(resp)).is_err() { return; }
+            }
+
+            stat_reads.fetch_add(1, Ordering::Relaxed);
+        });
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+
     async fn execute(&self, request: Request<ExecuteRequest>) -> Result<Response<ExecuteResponse>, Status> {
         let sql = request.into_inner().sql;
         if sql.is_empty() {
@@ -232,10 +306,29 @@ impl DuckDbService for DuckDbServerImpl {
         // Uses bulk_execute_all() which bypasses the WriteSerializer queue/batch entirely,
         // executing directly on each shard's dedicated bulk_conn for lower latency.
         let sharded = self.sharded_db.clone();
+        let has_sort = !req.sort_columns.is_empty();
         let result = tokio::task::spawn_blocking(move || {
             let sql = crate::writer::build_bulk_insert_sql(
                 &req.table, &req.columns, &req.data, req.row_count as usize)?;
-            sharded.bulk_execute_all(&sql)?;
+
+            if has_sort {
+                // Wrap in SELECT ... ORDER BY for sorted insert (improves zonemap effectiveness).
+                // Original: INSERT INTO t VALUES (1,'a'), (2,'b')
+                // Sorted:   INSERT INTO t SELECT * FROM (VALUES (1,'a'), (2,'b')) AS _t(col1,col2) ORDER BY col1
+                let col_names: Vec<_> = req.columns.iter().map(|c| c.name.clone()).collect();
+                let sort_cols = req.sort_columns.join(", ");
+
+                let values_pos = sql.find("VALUES").ok_or("No VALUES in SQL".to_string())?;
+                let prefix = &sql[..values_pos];
+                let values = &sql[values_pos + 6..];
+                let sorted_sql = format!(
+                    "{}SELECT * FROM (VALUES {}) AS _t({}) ORDER BY {}",
+                    prefix, values.trim(), col_names.join(", "), sort_cols
+                );
+                sharded.bulk_execute_all(&sorted_sql)?;
+            } else {
+                sharded.bulk_execute_all(&sql)?;
+            }
             Ok::<usize, String>(req.row_count as usize)
         }).await.map_err(|e| Status::internal(e.to_string()))?;
         match result {

@@ -394,6 +394,20 @@ namespace DuckDbServer
             return response;
         }
 
+        // ── QueryArrow ────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Arrow IPC streaming is not supported in the C# server. Returns UNIMPLEMENTED
+        /// so clients can fall back to the columnar Query RPC.
+        /// </summary>
+        public override Task QueryArrow(QueryRequest request,
+            IServerStreamWriter<ArrowResponse> responseStream,
+            ServerCallContext context)
+        {
+            throw new RpcException(new Status(StatusCode.Unimplemented,
+                "QueryArrow not available in C# server. Use Rust server for Arrow IPC."));
+        }
+
         // ── Execute ──────────────────────────────────────────────────────────
 
         /// <summary>
@@ -504,6 +518,29 @@ namespace DuckDbServer
             if (request.Data.Count != colCount)
                 return Task.FromResult(new BulkInsertResponse
                     { Success = false, Error = "data column count does not match columns metadata" });
+
+            // Sorted insert: use SQL with ORDER BY for better zonemap effectiveness
+            if (request.SortColumns.Count > 0)
+            {
+                try
+                {
+                    string sql = BulkInsertSqlBuilder.BuildSorted(table, request.Columns, request.Data, rowCount, request.SortColumns);
+                    var result = shardedDb.WriteToAll(sql);
+                    if (!result.Ok)
+                    {
+                        Interlocked.Increment(ref errors);
+                        return Task.FromResult(new BulkInsertResponse { Success = false, Error = result.Error });
+                    }
+                    queryCache.Invalidate();
+                    Interlocked.Increment(ref queriesWrite);
+                    return Task.FromResult(new BulkInsertResponse { Success = true, RowsInserted = rowCount });
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref errors);
+                    return Task.FromResult(new BulkInsertResponse { Success = false, Error = ex.Message });
+                }
+            }
 
             try
             {
@@ -755,6 +792,75 @@ namespace DuckDbServer
                     }
                 }
                 sb.Append(")");
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Constructs a sorted INSERT SQL using a subquery with ORDER BY.
+        /// This produces SQL like:
+        /// <c>INSERT INTO t SELECT * FROM (VALUES (1,'a'), (2,'b')) AS _t(col1, col2) ORDER BY col1</c>
+        /// Sorting before insert improves DuckDB zonemap effectiveness for selective reads.
+        /// </summary>
+        public static string BuildSorted(
+            string table,
+            Google.Protobuf.Collections.RepeatedField<ColumnMeta> columns,
+            Google.Protobuf.Collections.RepeatedField<ColumnData> data,
+            int rowCount,
+            Google.Protobuf.Collections.RepeatedField<string> sortColumns)
+        {
+            int colCount = columns.Count;
+            var sb = new System.Text.StringBuilder(rowCount * colCount * 10 + 200);
+
+            // Build: INSERT INTO table SELECT * FROM (VALUES (...), (...)) AS _t(col1, col2) ORDER BY sort_col
+            sb.Append("INSERT INTO ").Append(table).Append(" SELECT * FROM (VALUES ");
+
+            for (int r = 0; r < rowCount; r++)
+            {
+                if (r > 0) sb.Append(", ");
+                sb.Append("(");
+                for (int c = 0; c < colCount; c++)
+                {
+                    if (c > 0) sb.Append(", ");
+                    var cd = data[c];
+                    bool isNull = false;
+                    for (int n = 0; n < cd.NullIndices.Count; n++)
+                        if (cd.NullIndices[n] == r) { isNull = true; break; }
+                    if (isNull) { sb.Append("NULL"); continue; }
+                    switch (columns[c].Type)
+                    {
+                        case ColumnType.TypeBoolean:
+                            sb.Append(r < cd.BoolValues.Count && cd.BoolValues[r] ? "true" : "false"); break;
+                        case ColumnType.TypeInt32: case ColumnType.TypeInt8: case ColumnType.TypeInt16:
+                        case ColumnType.TypeUint8: case ColumnType.TypeUint16:
+                            sb.Append(r < cd.Int32Values.Count ? cd.Int32Values[r] : 0); break;
+                        case ColumnType.TypeInt64: case ColumnType.TypeUint32: case ColumnType.TypeUint64:
+                            sb.Append(r < cd.Int64Values.Count ? cd.Int64Values[r] : 0); break;
+                        case ColumnType.TypeFloat:
+                            sb.Append((r < cd.FloatValues.Count ? cd.FloatValues[r] : 0f)
+                                .ToString(System.Globalization.CultureInfo.InvariantCulture)); break;
+                        case ColumnType.TypeDouble: case ColumnType.TypeDecimal:
+                            sb.Append((r < cd.DoubleValues.Count ? cd.DoubleValues[r] : 0d)
+                                .ToString(System.Globalization.CultureInfo.InvariantCulture)); break;
+                        default:
+                            sb.Append("'").Append(r < cd.StringValues.Count ? cd.StringValues[r].Replace("'", "''") : "").Append("'"); break;
+                    }
+                }
+                sb.Append(")");
+            }
+
+            sb.Append(") AS _t(");
+            for (int c = 0; c < colCount; c++)
+            {
+                if (c > 0) sb.Append(", ");
+                sb.Append(columns[c].Name);
+            }
+            sb.Append(") ORDER BY ");
+            for (int s = 0; s < sortColumns.Count; s++)
+            {
+                if (s > 0) sb.Append(", ");
+                sb.Append(sortColumns[s]);
             }
 
             return sb.ToString();
