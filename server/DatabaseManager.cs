@@ -164,10 +164,11 @@ namespace DuckDbServer
             // thread pool contention. The connection pool provides parallelism instead
             // (N connections = N parallel queries). Without this, DuckDB would create
             // nCPU threads per connection, leading to severe over-subscription.
+            // Always threads=1 on the primary connection. The connection pool and
+            // write serializer both apply threads=1 on their own connections too.
+            // Pool-level parallelism (N connections) replaces DuckDB's internal threading.
             if (config.DuckDbThreads > 0)
                 ExecutePragma("SET threads=" + config.DuckDbThreads);
-            else if (shardCount > 1)
-                ExecutePragma("SET threads=" + Math.Max(1, Environment.ProcessorCount / shardCount));
             else
                 ExecutePragma("SET threads=1");
 

@@ -135,6 +135,11 @@ namespace DuckDbServer
             // exclusively by the writer thread and is never returned to any pool.
             writerConnection = dbManager.CreateConnection();
 
+            // Apply per-connection PRAGMAs to the writer connection.
+            // Without this, the writer connection uses DuckDB defaults (threads=nCPU)
+            // which causes thread over-subscription when running multiple shards.
+            ApplyWriterPragmas(writerConnection);
+
             writerThread = new Thread(DrainLoop)
             {
                 Name = "DAS-Writer",
@@ -599,6 +604,23 @@ namespace DuckDbServer
         ///   <item><description><see cref="DoneSignal"/> is disposed by the caller in <see cref="Submit"/> (only if the wait completed normally).</description></item>
         /// </list>
         /// </summary>
+        /// <summary>
+        /// Apply performance PRAGMAs to the writer connection.
+        /// Matches what ConnectionPool.ApplyConnectionPragmas does for reader connections.
+        /// Critical: without threads=1, the writer spawns nCPU internal threads per shard,
+        /// causing severe contention when running 8 shards.
+        /// </summary>
+        private static void ApplyWriterPragmas(DuckDB.NET.Data.DuckDBConnection conn)
+        {
+            try
+            {
+                using (var cmd = conn.CreateCommand()) { cmd.CommandText = "SET threads=1"; cmd.ExecuteNonQuery(); }
+                using (var cmd = conn.CreateCommand()) { cmd.CommandText = "SET preserve_insertion_order=false"; cmd.ExecuteNonQuery(); }
+                using (var cmd = conn.CreateCommand()) { cmd.CommandText = "PRAGMA enable_object_cache"; cmd.ExecuteNonQuery(); }
+            }
+            catch { /* best-effort — PRAGMAs are optimization hints */ }
+        }
+
         private sealed class WriteRequest
         {
             /// <summary>The SQL statement to execute.</summary>

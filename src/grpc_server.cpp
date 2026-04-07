@@ -126,15 +126,11 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
             duckdb_query(s->writer_conn, td.c_str(), nullptr);
         }
 
-        // Per-shard DuckDB tuning: divide CPU cores across shards to prevent
-        // over-subscription. Each pool connection also sets threads=1 individually.
-        {
-            unsigned hw = std::thread::hardware_concurrency();
-            if (!hw) hw = 4;
-            int db_threads = std::max(1, static_cast<int>(hw) / shard_count);
-            std::string t = "SET threads=" + std::to_string(db_threads);
-            duckdb_query(s->writer_conn, t.c_str(), nullptr);
-        }
+        // Per-shard DuckDB tuning on the writer connection.
+        // threads=1: critical for write performance. Without this, each writer
+        // spawns nCPU internal threads, causing severe contention with 8 shards.
+        // The pool provides parallelism; DuckDB internal threads are unnecessary.
+        duckdb_query(s->writer_conn, "SET threads=1", nullptr);
         duckdb_query(s->writer_conn, "PRAGMA enable_object_cache", nullptr);
         duckdb_query(s->writer_conn, "SET preserve_insertion_order=false", nullptr);
         duckdb_query(s->writer_conn, "SET checkpoint_threshold='256MB'", nullptr);
