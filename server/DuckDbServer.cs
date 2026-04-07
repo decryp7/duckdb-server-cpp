@@ -525,7 +525,7 @@ namespace DuckDbServer
 
                         if (isNull)
                         {
-                            row.AppendValue((string)null);
+                            row.AppendValue(DBNull.Value);
                             continue;
                         }
 
