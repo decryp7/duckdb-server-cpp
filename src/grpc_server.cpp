@@ -36,6 +36,20 @@
 
 namespace das {
 
+// ─── INSERT detection ───────────────────────────────────────────────────────
+
+/// Returns true if SQL is a simple INSERT (not INSERT ... SELECT, not INSERT OR REPLACE, etc.)
+static bool is_simple_insert(const std::string& sql) {
+    size_t i = 0;
+    while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+    // Case-insensitive check for "INSERT"
+    if (i + 6 > sql.size()) return false;
+    const char* p = sql.c_str() + i;
+    if ((p[0]|32)!='i' || (p[1]|32)!='n' || (p[2]|32)!='s' || (p[3]|32)!='e' || (p[4]|32)!='r' || (p[5]|32)!='t') return false;
+    if (i + 6 < sql.size() && !std::isspace(static_cast<unsigned char>(sql[i+6]))) return false;
+    return true;
+}
+
 // ─── Construction / destruction ──────────────────────────────────────────────
 
 /**
@@ -193,6 +207,30 @@ WriteResult DuckGrpcServer::write_to_all(const std::string& sql) {
     for (auto& s : shards_) {
         WriteResult wr = s->writer->submit(sql);
         if (!wr.ok) return wr;
+    }
+    return WriteResult{true, ""};
+}
+
+/**
+ * @brief Execute SQL directly on bulk_conn for all shards, bypassing WriteSerializer.
+ *
+ * Used for INSERT statements which can safely run concurrently (DuckDB guarantees
+ * concurrent appends never conflict). This avoids the WriteSerializer batch queue,
+ * giving lower latency for simple INSERTs.
+ *
+ * @param sql  The INSERT SQL to execute on every shard's bulk_conn.
+ * @return     WriteResult indicating success or the first error encountered.
+ */
+WriteResult DuckGrpcServer::bulk_execute_all(const std::string& sql) {
+    for (auto& s : shards_) {
+        std::lock_guard<std::mutex> lock(s->bulk_mu);
+        duckdb_result raw{};
+        if (duckdb_query(s->bulk_conn, sql.c_str(), &raw) == DuckDBError) {
+            std::string err = duckdb_result_error(&raw);
+            duckdb_destroy_result(&raw);
+            return WriteResult{false, err};
+        }
+        duckdb_destroy_result(&raw);
     }
     return WriteResult{true, ""};
 }
