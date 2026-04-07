@@ -357,6 +357,15 @@ public:
         duckdb::v1::BulkInsertResponse*) override;
 
     /**
+     * @brief Arrow IPC streaming query (not implemented in C++ server).
+     *
+     * Returns UNIMPLEMENTED — Arrow IPC serialization requires the Arrow C++
+     * library which is not linked.  Use the Rust server for Arrow IPC support.
+     */
+    grpc::Status QueryArrow(grpc::ServerContext*, const duckdb::v1::QueryRequest*,
+        grpc::ServerWriter<duckdb::v1::ArrowResponse>*) override;
+
+    /**
      * @brief Collect a snapshot of server statistics.
      * @return ServerStats with current counter values and pool size.
      */

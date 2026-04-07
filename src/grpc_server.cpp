@@ -32,6 +32,7 @@
 #include <iostream>
 #include <thread>
 #include <cstring>
+#include <future>
 #include <google/protobuf/arena.h>
 
 namespace das {
@@ -203,9 +204,18 @@ WriteResult DuckGrpcServer::write_to_all(const std::string& sql) {
     if (shards_.size() == 1)
         return shards_[0]->writer->submit(sql);
 
-    // Fan-out: submit to all shards (serial for simplicity; could use threads)
+    // Parallel fan-out: submit to all shards concurrently using std::async.
+    std::vector<std::future<WriteResult>> futures;
+    futures.reserve(shards_.size());
     for (auto& s : shards_) {
-        WriteResult wr = s->writer->submit(sql);
+        futures.push_back(std::async(std::launch::async, [&s, &sql]() {
+            return s->writer->submit(sql);
+        }));
+    }
+
+    // Wait for all and return first error
+    for (auto& f : futures) {
+        WriteResult wr = f.get();
         if (!wr.ok) return wr;
     }
     return WriteResult{true, ""};
@@ -222,15 +232,38 @@ WriteResult DuckGrpcServer::write_to_all(const std::string& sql) {
  * @return     WriteResult indicating success or the first error encountered.
  */
 WriteResult DuckGrpcServer::bulk_execute_all(const std::string& sql) {
-    for (auto& s : shards_) {
-        std::lock_guard<std::mutex> lock(s->bulk_mu);
+    if (shards_.size() == 1) {
+        std::lock_guard<std::mutex> lock(shards_[0]->bulk_mu);
         duckdb_result raw{};
-        if (duckdb_query(s->bulk_conn, sql.c_str(), &raw) == DuckDBError) {
+        if (duckdb_query(shards_[0]->bulk_conn, sql.c_str(), &raw) == DuckDBError) {
             std::string err = duckdb_result_error(&raw);
             duckdb_destroy_result(&raw);
             return WriteResult{false, err};
         }
         duckdb_destroy_result(&raw);
+        return WriteResult{true, ""};
+    }
+
+    // Parallel fan-out
+    std::vector<std::future<WriteResult>> futures;
+    futures.reserve(shards_.size());
+    for (auto& s : shards_) {
+        futures.push_back(std::async(std::launch::async, [&s, &sql]() {
+            std::lock_guard<std::mutex> lock(s->bulk_mu);
+            duckdb_result raw{};
+            if (duckdb_query(s->bulk_conn, sql.c_str(), &raw) == DuckDBError) {
+                std::string err = duckdb_result_error(&raw);
+                duckdb_destroy_result(&raw);
+                return WriteResult{false, err};
+            }
+            duckdb_destroy_result(&raw);
+            return WriteResult{true, ""};
+        }));
+    }
+
+    for (auto& f : futures) {
+        WriteResult wr = f.get();
+        if (!wr.ok) return wr;
     }
     return WriteResult{true, ""};
 }
@@ -711,6 +744,24 @@ grpc::Status DuckGrpcServer::GetStats(
     response->set_reader_pool_size(static_cast<int>(s.reader_pool_size));
     response->set_port(s.port);
     return grpc::Status::OK;
+}
+
+// ─── QueryArrow: Arrow IPC streaming (not implemented) ─────────────────────
+
+/**
+ * @brief Arrow IPC streaming query — returns UNIMPLEMENTED.
+ *
+ * Arrow IPC serialization requires the Arrow C++ library (libarrow), which is
+ * not linked in this build.  Clients needing Arrow IPC should use the Rust
+ * server, which has native Arrow support via the arrow crate.
+ */
+grpc::Status DuckGrpcServer::QueryArrow(
+    grpc::ServerContext*,
+    const duckdb::v1::QueryRequest* request,
+    grpc::ServerWriter<duckdb::v1::ArrowResponse>* writer)
+{
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
+        "QueryArrow not available in C++ server. Use Rust server for Arrow IPC.");
 }
 
 // ─── BulkInsert: Appender API for direct columnar insertion ─────────────────

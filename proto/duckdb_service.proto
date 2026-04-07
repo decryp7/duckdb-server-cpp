@@ -52,40 +52,24 @@ option csharp_namespace = "DuckDbProto";
 service DuckDbService {
 
   // Execute a SQL SELECT query and stream columnar results.
-  // Server-streaming: the server sends multiple QueryResponse messages,
-  // each containing a batch of rows. The first message includes column
-  // metadata (names + types). All messages include row data.
-  //
-  // Cache behavior: results are cached in QueryCache. Subsequent identical
-  // queries return from cache (~0.1ms) without touching DuckDB.
-  //
-  // Sharding: query is routed to a single shard via round-robin.
   rpc Query (QueryRequest) returns (stream QueryResponse);
 
+  // Execute a SQL SELECT and stream results as Arrow IPC batches.
+  // Zero-copy: server serializes DuckDB's internal Arrow buffers directly.
+  // Clients with Arrow support should prefer this over Query for large results.
+  // Falls back to error if server doesn't support Arrow (e.g. C# server).
+  rpc QueryArrow (QueryRequest) returns (stream ArrowResponse);
+
   // Execute a DML or DDL statement (INSERT, UPDATE, DELETE, CREATE TABLE, etc.)
-  // Write is fan-out to ALL shards to keep data consistent.
-  // Cache is fully invalidated after every successful write.
-  //
-  // Write batching: concurrent Execute calls are batched by the
-  // WriteSerializer into single transactions for higher throughput.
-  // Compatible INSERTs are merged into multi-row statements.
   rpc Execute (ExecuteRequest) returns (ExecuteResponse);
 
   // Bulk insert columnar data into an existing table.
-  // Server builds a multi-row INSERT SQL and routes through WriteSerializer.
-  // Fan-out to ALL shards. Cache is invalidated after success.
-  //
-  // Note: The proto comment mentions "Appender API" but the current
-  // implementation builds SQL to avoid thread-safety issues with direct
-  // connection access while the WriteSerializer background thread is running.
   rpc BulkInsert (BulkInsertRequest) returns (BulkInsertResponse);
 
-  // Health check. Returns "pong". No database interaction.
-  // Use for load balancer health probes or client connectivity checks.
+  // Health check. Returns "pong".
   rpc Ping (PingRequest) returns (PingResponse);
 
-  // Server metrics: read/write counts, error count, pool size, port.
-  // All counters are monotonically increasing since server start.
+  // Server metrics.
   rpc GetStats (StatsRequest) returns (StatsResponse);
 }
 
@@ -160,6 +144,17 @@ message ColumnData {
   repeated int32 null_indices = 15 [packed = true];
 }
 
+// ── Arrow IPC Response ──────────────────────────────────────────────────────
+
+// Arrow IPC response: zero-copy wire format for high-throughput reads.
+// Each message contains one Arrow IPC record batch as raw bytes.
+// First message includes the schema (Arrow IPC schema message).
+// Clients deserialize using any Arrow IPC reader (pyarrow, arrow-rs, etc.)
+message ArrowResponse {
+  bytes ipc_data = 1;           // Arrow IPC record batch (or schema for first msg)
+  int32 row_count = 2;          // Number of rows in this batch (0 for schema-only msg)
+}
+
 // ── Execute ──────────────────────────────────────────────────────────────────
 
 message ExecuteRequest {
@@ -206,6 +201,9 @@ message BulkInsertRequest {
   repeated ColumnMeta columns = 2;     // Column metadata (names + types)
   repeated ColumnData data = 3;        // Columnar data (same format as QueryResponse)
   int32 row_count = 4;                 // Number of rows in this batch
+  repeated string sort_columns = 5;    // Optional: sort data by these columns before insert.
+                                       // Improves zonemap effectiveness for selective reads.
+                                       // Empty = no sorting (default, fastest insert speed).
 }
 
 message BulkInsertResponse {
