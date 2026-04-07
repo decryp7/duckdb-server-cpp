@@ -44,31 +44,42 @@ pub struct ShardedDuckDb {
 
 impl ShardedDuckDb {
     pub fn new(db_path: &str, shard_count: usize, readers_per_shard: usize,
-               batch_ms: u64, batch_max: usize, temp_dir: &str) -> Result<Self, String>
+               batch_ms: u64, batch_max: usize, temp_dir: &str, backup_db: &str) -> Result<Self, String>
     {
-        let shard_count = std::cmp::max(1, shard_count);
-        let mut shards = Vec::with_capacity(shard_count);
+        let hybrid_mode = !backup_db.is_empty();
+        let memory_shard_count = std::cmp::max(1, shard_count);
+        let total_shard_count = if hybrid_mode { memory_shard_count + 1 } else { memory_shard_count };
+        let read_start_index = if hybrid_mode { 1 } else { 0 };
+        let readable_shards = if hybrid_mode { memory_shard_count } else { total_shard_count };
+        let readers_per_shard = std::cmp::max(1, readers_per_shard);
 
-        for i in 0..shard_count {
-            let path = shard_path(db_path, i, shard_count);
+        let mut shards = Vec::with_capacity(total_shard_count);
 
-            let pool = Arc::new(ConnectionPool::new(&path, readers_per_shard)?);
+        for i in 0..total_shard_count {
+            let path = if hybrid_mode && i == 0 {
+                backup_db.to_string() // File DB for durability
+            } else if hybrid_mode {
+                ":memory:".to_string() // Memory DB for speed
+            } else {
+                shard_path(db_path, i, total_shard_count)
+            };
+
+            // File shard (index 0 in hybrid) gets minimal readers since it's write-only
+            let pool_size = if hybrid_mode && i == 0 { 1 } else { readers_per_shard };
+            let pool = Arc::new(ConnectionPool::new(&path, pool_size)?);
 
             let writer = {
                 let conn = pool.borrow()?;
                 // Apply database-wide settings (affect all connections on this database).
                 // memory_limit prevents N shards each claiming 80% RAM.
-                if shard_count > 1 {
-                    let pct = std::cmp::max(10, 80 / shard_count);
+                if total_shard_count > 1 {
+                    let pct = std::cmp::max(10, 80 / total_shard_count);
                     let _ = conn.execute_batch(&format!("SET memory_limit='{}%'", pct));
                 }
                 if !temp_dir.is_empty() {
                     let _ = conn.execute_batch(&format!("SET temp_directory='{}'", temp_dir));
                 }
                 // IMPORTANT: Reset threads=1 before conn returns to pool.
-                // threads is per-connection, not database-wide. Pool connections must
-                // keep threads=1 (set by apply_connection_pragmas) so that the pool
-                // provides parallelism instead of each connection spawning its own threads.
                 let _ = conn.execute_batch("SET threads=1");
                 Arc::new(WriteSerializer::from_conn(&conn, batch_ms, batch_max)?)
             };
@@ -86,21 +97,34 @@ impl ShardedDuckDb {
             shards.push(Shard { pool, writer, bulk_conn: Mutex::new(bulk_conn) });
         }
 
-        println!("[das] Sharded DuckDB (read-all / write-all):");
-        println!("      shards   = {}", shard_count);
-        println!("      readers  = {} per shard, {} total",
-                 readers_per_shard, readers_per_shard * shard_count);
-
-        Ok(Self {
+        let result = Self {
             shards,
             next_read: AtomicUsize::new(0),
-        })
+            read_start_index,
+        };
+
+        // Hybrid mode: sync existing tables from file DB to memory shards
+        if hybrid_mode {
+            result.sync_file_to_memory(backup_db)?;
+            println!("[das] Hybrid mode: file backup at {}", backup_db);
+        }
+
+        println!("[das] Sharded DuckDB ({}):",
+                 if hybrid_mode { "hybrid: file backup + memory shards" } else { "read-all / write-all" });
+        println!("      total shards = {} ({})", total_shard_count,
+                 if hybrid_mode { format!("1 file + {} memory", memory_shard_count) }
+                 else { format!("all {}", total_shard_count) });
+        println!("      readers      = {} per shard, {} total",
+                 readers_per_shard, result.total_pool_size());
+
+        Ok(result)
     }
 
-    /// Round-robin shard for reads.
+    /// Round-robin shard for reads (skips file shard in hybrid mode).
     pub fn next_for_read(&self) -> &Shard {
         let idx = self.next_read.fetch_add(1, Ordering::Relaxed);
-        &self.shards[idx % self.shards.len()]
+        let readable = self.shards.len() - self.read_start_index;
+        &self.shards[self.read_start_index + (idx % readable)]
     }
 
     /// Fan-out write to ALL shards. Returns first error or Ok.
@@ -146,6 +170,57 @@ impl ShardedDuckDb {
         for r in results {
             if let Err(e) = r { return Err(e); }
         }
+        Ok(())
+    }
+
+    /// Sync existing tables from the file-based backup DB (shard 0) to all memory shards.
+    /// Uses DuckDB ATTACH to read from the file DB and CREATE TABLE AS SELECT to copy data.
+    fn sync_file_to_memory(&self, file_path: &str) -> Result<(), String> {
+        // Get list of tables from file DB (shard 0)
+        let tables: Vec<String> = {
+            let conn = self.shards[0].pool.borrow()?;
+            let mut stmt = conn.prepare(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).map_err(|e| format!("Hybrid sync query: {}", e))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("Hybrid sync rows: {}", e))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        if tables.is_empty() {
+            println!("[das] Hybrid sync: no tables in file DB (fresh start)");
+            return Ok(());
+        }
+
+        println!("[das] Hybrid sync: copying {} tables from file DB to {} memory shards...",
+                 tables.len(), self.shards.len() - 1);
+
+        let escaped_path = file_path.replace('\'', "''");
+
+        for s in 1..self.shards.len() {
+            let conn = self.shards[s].pool.borrow()?;
+
+            conn.execute_batch(&format!(
+                "ATTACH '{}' AS backup_src (READ_ONLY)", escaped_path
+            )).map_err(|e| format!("Hybrid sync ATTACH shard {}: {}", s, e))?;
+
+            for table in &tables {
+                let quoted = format!("\"{}\"", table.replace('"', "\"\""));
+                let copy_sql = format!(
+                    "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM backup_src.{}",
+                    quoted, quoted
+                );
+                if let Err(e) = conn.execute_batch(&copy_sql) {
+                    eprintln!("[das] Hybrid sync: failed to copy table '{}' to shard {}: {}",
+                             table, s, e);
+                }
+            }
+
+            conn.execute_batch("DETACH backup_src")
+                .map_err(|e| format!("Hybrid sync DETACH shard {}: {}", s, e))?;
+        }
+
+        println!("[das] Hybrid sync: complete");
         Ok(())
     }
 
