@@ -331,14 +331,18 @@ impl DuckDbService for DuckDbServerImpl {
                     }
                 }
                 // Wrap in SELECT ... ORDER BY for sorted insert (improves zonemap effectiveness)
-                let sort_cols = req.sort_columns.join(", ");
+                // Quote all identifiers to prevent SQL injection and handle reserved words
+                let quoted_cols: Vec<_> = col_names.iter()
+                    .map(|n| crate::writer::quote_ident(n)).collect();
+                let quoted_sort: Vec<_> = req.sort_columns.iter()
+                    .map(|n| crate::writer::quote_ident(n)).collect();
 
                 let values_pos = sql.find("VALUES").ok_or("No VALUES in SQL".to_string())?;
                 let prefix = &sql[..values_pos];
                 let values = &sql[values_pos + 6..];
                 let sorted_sql = format!(
                     "{}SELECT * FROM (VALUES {}) AS _t({}) ORDER BY {}",
-                    prefix, values.trim(), col_names.join(", "), sort_cols
+                    prefix, values.trim(), quoted_cols.join(", "), quoted_sort.join(", ")
                 );
                 sharded.bulk_execute_all(&sorted_sql)?;
             } else {

@@ -866,13 +866,13 @@ namespace DuckDbServer
             for (int c = 0; c < colCount; c++)
             {
                 if (c > 0) sb.Append(", ");
-                sb.Append(columns[c].Name);
+                sb.Append('"').Append(columns[c].Name.Replace("\"", "\"\"")).Append('"');
             }
             sb.Append(") ORDER BY ");
             for (int s = 0; s < sortColumns.Count; s++)
             {
                 if (s > 0) sb.Append(", ");
-                sb.Append(sortColumns[s]);
+                sb.Append('"').Append(sortColumns[s].Replace("\"", "\"\"")).Append('"');
             }
 
             return sb.ToString();

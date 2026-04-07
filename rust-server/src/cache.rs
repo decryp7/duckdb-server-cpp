@@ -42,13 +42,16 @@ impl QueryCache {
     }
 
     pub fn get(&self, sql: &str) -> Option<Vec<QueryResponse>> {
-        let map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = map.get(sql) {
             if entry.created_at.elapsed() < self.ttl {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 return Some(entry.responses.clone());
             }
+            // Expired — remove eagerly to prevent stale entry accumulation
         }
+        // Remove the expired entry (if any) outside the borrow
+        map.remove(sql);
         self.misses.fetch_add(1, Ordering::Relaxed);
         None
     }

@@ -62,6 +62,18 @@ impl WriteSerializer {
     }
 }
 
+/// Quote a SQL identifier with double quotes, escaping embedded double quotes.
+pub fn quote_ident(name: &str) -> String {
+    let mut q = String::with_capacity(name.len() + 2);
+    q.push('"');
+    for ch in name.chars() {
+        if ch == '"' { q.push_str("\"\""); }
+        else { q.push(ch); }
+    }
+    q.push('"');
+    q
+}
+
 pub fn build_bulk_insert_sql(
     table: &str, columns: &[ColumnMeta], data: &[ColumnData], row_count: usize,
 ) -> Result<String, String> {
@@ -73,7 +85,7 @@ pub fn build_bulk_insert_sql(
     for r in 0..row_count {
         if r == 0 {
             sql.push_str("INSERT INTO ");
-            sql.push_str(table);
+            sql.push_str(&quote_ident(table));
             sql.push_str(" VALUES (");
         } else {
             sql.push_str(", (");
