@@ -35,7 +35,7 @@ mod writer;
 use clap::Parser;
 use duckdb::arrow::array::*;
 use duckdb::arrow::datatypes::DataType;
-use duckdb::arrow::ipc::writer::StreamWriter;
+use arrow::ipc::writer::StreamWriter;
 use shard::ShardedDuckDb;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
