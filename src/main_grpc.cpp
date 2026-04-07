@@ -143,6 +143,7 @@ int main(int argc, char* argv[]) {
         else if (a == "--tls-key")       cfg.tls_key_path     = val;
         else if (a == "--memory-limit")  cfg.memory_limit     = val;
         else if (a == "--temp-dir")      cfg.temp_directory   = val;
+        else if (a == "--backup-db")    cfg.backup_db_path   = val;
         else { std::cerr << "Unknown option: " << a << "\n"; usage(argv[0]); return 1; }
     }
 

@@ -75,6 +75,9 @@ struct Args {
     /// Temp directory for DuckDB spill-to-disk
     #[arg(long, default_value = "")]
     temp_dir: String,
+    /// Path to durable file-based DuckDB for hybrid mode (backup shard + memory shards)
+    #[arg(long, default_value = "")]
+    backup_db: String,
 }
 
 struct DuckDbServerImpl {
@@ -575,7 +578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sharded_db = Arc::new(ShardedDuckDb::new(
         &args.db, shard_count, readers_per_shard,
-        args.batch_ms, args.batch_max, &args.temp_dir,
+        args.batch_ms, args.batch_max, &args.temp_dir, &args.backup_db,
     )?);
 
     let query_cache = Arc::new(cache::QueryCache::new(10000, 60));

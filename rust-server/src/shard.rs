@@ -37,6 +37,9 @@ pub struct Shard {
 pub struct ShardedDuckDb {
     shards: Vec<Shard>,
     next_read: AtomicUsize,
+    /// Index of the first shard eligible for reads.
+    /// 0 in normal mode, 1 in hybrid mode (skips the file-based backup shard).
+    read_start_index: usize,
 }
 
 impl ShardedDuckDb {

@@ -99,6 +99,12 @@ struct ServerConfig {
 
     /// Path for DuckDB spill-to-disk temp directory.  Empty = DuckDB default.
     std::string temp_directory;
+
+    /// Hybrid mode: file DB path for durability backup.
+    /// When set, shard 0 is a file DB (write-only backup) and all other
+    /// shards are in-memory (fast reads). Reads never touch the file DB.
+    /// Empty = all shards use db_path (original behavior).
+    std::string backup_db_path;
 };
 
 /**
@@ -435,10 +441,17 @@ private:
      */
     WriteResult bulk_execute_all(const std::string& sql);
 
+    /**
+     * @brief Sync tables from file DB (shard 0) to all memory shards in hybrid mode.
+     * @param file_path  Path to the file-based DuckDB backup.
+     */
+    void sync_file_to_memory(const std::string& file_path);
+
     ServerConfig cfg_;                             ///< Copy of the server configuration.
     std::vector<std::unique_ptr<Shard>> shards_;   ///< All shards (1 unless --shards > 1).
     QueryCache cache_;                             ///< Thread-safe query result cache.
     std::atomic<size_t> next_read_shard_;           ///< Round-robin counter for read distribution.
+    int read_start_index_;                          ///< 0 for normal mode, 1 for hybrid (skip file shard for reads).
 
     std::atomic<long long> stat_queries_read_;      ///< Monotonic counter of successful reads.
     std::atomic<long long> stat_queries_write_;     ///< Monotonic counter of successful writes.

@@ -172,23 +172,36 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         cfg_.reader_pool_size = (hw > 0 ? hw : 4) * 2;
     }
 
-    int shard_count = std::max(1, cfg_.shards);
-    size_t readers_per_shard = std::max<size_t>(1, cfg_.reader_pool_size / shard_count);
+    bool hybrid_mode = !cfg_.backup_db_path.empty();
+    int memory_shard_count = std::max(1, cfg_.shards);
+    int total_shard_count = hybrid_mode ? memory_shard_count + 1 : memory_shard_count;
+    read_start_index_ = hybrid_mode ? 1 : 0;
+    int readable_shards = hybrid_mode ? memory_shard_count : total_shard_count;
+    size_t readers_per_shard = std::max<size_t>(1, cfg_.reader_pool_size / readable_shards);
 
-    for (int i = 0; i < shard_count; ++i) {
+    for (int i = 0; i < total_shard_count; ++i) {
         auto s = std::unique_ptr<Shard>(new Shard());
         s->db = nullptr;
         s->writer_conn = nullptr;
         s->bulk_conn = nullptr;
 
-        std::string path = shard_path(cfg_.db_path, i, shard_count);
+        std::string path;
+        if (hybrid_mode && i == 0)
+            path = cfg_.backup_db_path; // File DB for durability
+        else if (hybrid_mode)
+            path = ""; // Empty = in-memory
+        else
+            path = shard_path(cfg_.db_path, i, total_shard_count);
+
         const bool is_memory = path.empty() || path == ":memory:";
         const char* cpath = is_memory ? nullptr : path.c_str();
 
         if (duckdb_open(cpath, &s->db) == DuckDBError)
             throw std::runtime_error("Cannot open shard " + std::to_string(i));
 
-        s->pool = std::unique_ptr<ConnectionPool>(new ConnectionPool(s->db, readers_per_shard));
+        // File shard (index 0 in hybrid) gets minimal readers since it's write-only
+        size_t pool_size = (hybrid_mode && i == 0) ? 1 : readers_per_shard;
+        s->pool = std::unique_ptr<ConnectionPool>(new ConnectionPool(s->db, pool_size));
 
         if (duckdb_connect(s->db, &s->writer_conn) == DuckDBError)
             throw std::runtime_error("Cannot create writer for shard " + std::to_string(i));
@@ -203,8 +216,8 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         duckdb_query(s->bulk_conn, "SET preserve_insertion_order=false", nullptr);
 
         // Auto-calculate memory limit per shard if not explicitly set
-        if (cfg_.memory_limit.empty() && shard_count > 1) {
-            int pct = std::max(10, 80 / shard_count);
+        if (cfg_.memory_limit.empty() && total_shard_count > 1) {
+            int pct = std::max(10, 80 / total_shard_count);
             std::string limit = "SET memory_limit='" + std::to_string(pct) + "%'";
             duckdb_query(s->writer_conn, limit.c_str(), nullptr);
         } else if (!cfg_.memory_limit.empty()) {
@@ -219,9 +232,6 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         }
 
         // Per-shard DuckDB tuning on the writer connection.
-        // threads=1: critical for write performance. Without this, each writer
-        // spawns nCPU internal threads, causing severe contention with 8 shards.
-        // The pool provides parallelism; DuckDB internal threads are unnecessary.
         duckdb_query(s->writer_conn, "SET threads=1", nullptr);
         duckdb_query(s->writer_conn, "PRAGMA enable_object_cache", nullptr);
         duckdb_query(s->writer_conn, "SET preserve_insertion_order=false", nullptr);
@@ -232,16 +242,114 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         shards_.push_back(std::move(s));
     }
 
-    std::cout << "[das] DuckGrpcServer (sharded, read-all / write-all)\n"
-              << "      shards   = " << shard_count << "\n"
-              << "      readers  = " << readers_per_shard << " per shard, "
-              << readers_per_shard * shard_count << " total\n"
-              << "      db       = " << cfg_.db_path << "\n";
+    // Hybrid mode: sync existing tables from file DB to memory shards
+    if (hybrid_mode) {
+        sync_file_to_memory(cfg_.backup_db_path);
+        std::cout << "[das] Hybrid mode: file backup at " << cfg_.backup_db_path << "\n";
+    }
+
+    std::cout << "[das] DuckGrpcServer ("
+              << (hybrid_mode ? "hybrid: file backup + memory shards" : "read-all / write-all")
+              << ")\n"
+              << "      total shards = " << total_shard_count << " ("
+              << (hybrid_mode ? "1 file + " + std::to_string(memory_shard_count) + " memory"
+                              : "all " + std::to_string(total_shard_count))
+              << ")\n"
+              << "      readers      = " << readers_per_shard << " per shard, "
+              << readers_per_shard * readable_shards << " total\n"
+              << "      db           = " << cfg_.db_path << "\n";
 }
 
 /** @brief Destroy all shards. Each Shard destructor disconnects and closes its DuckDB. */
 DuckGrpcServer::~DuckGrpcServer() {
     shards_.clear(); // Shard destructor handles cleanup
+}
+
+/**
+ * @brief Sync existing tables from file DB (shard 0) to all memory shards.
+ *
+ * ATTACHes the file DB as a read-only source in each memory shard, then
+ * copies all tables via CREATE TABLE AS SELECT. Called once during construction
+ * in hybrid mode.
+ */
+void DuckGrpcServer::sync_file_to_memory(const std::string& file_path) {
+    // Get list of tables from file DB (shard 0)
+    std::vector<std::string> tables;
+    {
+        duckdb_connection conn;
+        if (duckdb_connect(shards_[0]->db, &conn) == DuckDBError) {
+            std::cerr << "[das] Hybrid sync: cannot connect to file DB\n";
+            return;
+        }
+        duckdb_result result{};
+        if (duckdb_query(conn, "SELECT table_name FROM information_schema.tables WHERE table_schema='main'", &result) == DuckDBSuccess) {
+            idx_t rows = duckdb_row_count(&result);
+            for (idx_t r = 0; r < rows; ++r) {
+                char* val = duckdb_value_varchar(&result, 0, r);
+                if (val) {
+                    tables.push_back(val);
+                    duckdb_free(val);
+                }
+            }
+        }
+        duckdb_destroy_result(&result);
+        duckdb_disconnect(&conn);
+    }
+
+    if (tables.empty()) {
+        std::cout << "[das] Hybrid sync: no tables in file DB (fresh start)\n";
+        return;
+    }
+
+    std::cout << "[das] Hybrid sync: copying " << tables.size()
+              << " tables from file DB to " << (shards_.size() - 1) << " memory shards...\n";
+
+    // For each memory shard, ATTACH the file DB and copy each table
+    for (size_t s = 1; s < shards_.size(); ++s) {
+        duckdb_connection conn;
+        if (duckdb_connect(shards_[s]->db, &conn) == DuckDBError) {
+            std::cerr << "[das] Hybrid sync: cannot connect to shard " << s << "\n";
+            continue;
+        }
+
+        // Escape single quotes in file path
+        std::string escaped_path;
+        for (char c : file_path) {
+            if (c == '\'') escaped_path += "''";
+            else escaped_path += c;
+        }
+
+        std::string attach_sql = "ATTACH '" + escaped_path + "' AS backup_src (READ_ONLY)";
+        duckdb_result res{};
+        if (duckdb_query(conn, attach_sql.c_str(), &res) == DuckDBError) {
+            std::cerr << "[das] Hybrid sync: ATTACH failed for shard " << s << ": "
+                      << duckdb_result_error(&res) << "\n";
+            duckdb_destroy_result(&res);
+            duckdb_disconnect(&conn);
+            continue;
+        }
+        duckdb_destroy_result(&res);
+
+        for (const auto& table : tables) {
+            // Escape double quotes in table name
+            std::string quoted = quote_ident(table);
+            std::string copy_sql = "CREATE TABLE IF NOT EXISTS " + quoted
+                + " AS SELECT * FROM backup_src." + quoted;
+            duckdb_result tres{};
+            if (duckdb_query(conn, copy_sql.c_str(), &tres) == DuckDBError) {
+                std::cerr << "[das] Hybrid sync: failed to copy table '" << table
+                          << "' to shard " << s << ": " << duckdb_result_error(&tres) << "\n";
+            }
+            duckdb_destroy_result(&tres);
+        }
+
+        duckdb_result dres{};
+        duckdb_query(conn, "DETACH backup_src", &dres);
+        duckdb_destroy_result(&dres);
+        duckdb_disconnect(&conn);
+    }
+
+    std::cout << "[das] Hybrid sync: complete\n";
 }
 
 /**
@@ -252,8 +360,9 @@ DuckGrpcServer::~DuckGrpcServer() {
  * The modulo wraps naturally even when the counter overflows.
  */
 Shard& DuckGrpcServer::next_for_read() {
+    int readable = static_cast<int>(shards_.size()) - read_start_index_;
     size_t idx = next_read_shard_.fetch_add(1, std::memory_order_relaxed);
-    return *shards_[idx % shards_.size()];
+    return *shards_[read_start_index_ + (idx % readable)];
 }
 
 /**
