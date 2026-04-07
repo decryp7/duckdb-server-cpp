@@ -151,6 +151,10 @@ struct Shard {
         if (bulk_conn) duckdb_disconnect(&bulk_conn);
         if (db) duckdb_close(&db);
     }
+
+    // Non-copyable (raw C handles would be double-freed on copy)
+    Shard(const Shard&) = delete;
+    Shard& operator=(const Shard&) = delete;
 };
 
 /**

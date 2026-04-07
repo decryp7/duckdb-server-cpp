@@ -39,6 +39,18 @@ namespace das {
 
 // ─── INSERT detection ───────────────────────────────────────────────────────
 
+/// Quote a SQL identifier with double quotes, escaping embedded double quotes.
+/// e.g., my"col → "my""col"
+static std::string quote_ident(const std::string& name) {
+    std::string q = "\"";
+    for (char c : name) {
+        if (c == '"') q += "\"\""; // escape embedded double quote
+        else q += c;
+    }
+    q += "\"";
+    return q;
+}
+
 /// Returns true if SQL is a simple INSERT (not INSERT ... SELECT, not INSERT OR REPLACE, etc.)
 static bool is_simple_insert(const std::string& sql) {
     size_t i = 0;
@@ -306,7 +318,7 @@ static duckdb::v1::ColumnType map_column_type(duckdb_type t) {
         case DUCKDB_TYPE_TIMESTAMP: return duckdb::v1::TYPE_TIMESTAMP;
         case DUCKDB_TYPE_DATE:      return duckdb::v1::TYPE_DATE;
         case DUCKDB_TYPE_TIME:      return duckdb::v1::TYPE_TIME;
-        case DUCKDB_TYPE_DECIMAL:   return duckdb::v1::TYPE_DECIMAL;
+        case DUCKDB_TYPE_DECIMAL:   return duckdb::v1::TYPE_STRING; // DECIMAL stored as fixed-point int, must use string path
         default:                    return duckdb::v1::TYPE_STRING;
     }
 }
@@ -488,9 +500,14 @@ static void fill_column_from_vector(
         break;
     }
 
+    // ── DECIMAL: route to string fallback (DuckDB stores as fixed-point int, not double)
+    // DuckDB DECIMAL internal storage depends on precision: int16/int32/int64/hugeint.
+    // Treating the buffer as double* would produce garbage. Use the string fallback
+    // which goes through duckdb_string_t and reads the formatted value correctly.
+    // (map_column_type returns TYPE_DECIMAL, but fill uses string path for safety)
+
     // ── DOUBLE ───────────────────────────────────────────────────────────
-    case duckdb::v1::TYPE_DOUBLE:
-    case duckdb::v1::TYPE_DECIMAL: {
+    case duckdb::v1::TYPE_DOUBLE: {
         double* vals = static_cast<double*>(data);
         if (!has_nulls) {
             auto* field = cd->mutable_double_values();
@@ -582,6 +599,8 @@ grpc::Status DuckGrpcServer::Query(
     const duckdb::v1::QueryRequest* request,
     grpc::ServerWriter<duckdb::v1::QueryResponse>* writer)
 {
+    duckdb_result result;
+    bool result_valid = false; // Track whether result needs cleanup on exception
     try {
         // Cache check
         std::vector<duckdb::v1::QueryResponse> cached;
@@ -593,8 +612,6 @@ grpc::Status DuckGrpcServer::Query(
 
         auto& shard = next_for_read();
         auto handle = shard.pool->borrow();
-
-        duckdb_result result;
         std::vector<duckdb::v1::QueryResponse> to_cache;
         if (duckdb_query(handle.get(), request->sql().c_str(), &result) == DuckDBError) {
             std::string err = duckdb_result_error(&result);
@@ -602,6 +619,7 @@ grpc::Status DuckGrpcServer::Query(
             stat_errors_.fetch_add(1);
             return grpc::Status(grpc::StatusCode::INTERNAL, err);
         }
+        result_valid = true;
 
         idx_t col_count = duckdb_column_count(&result);
 
@@ -676,6 +694,9 @@ grpc::Status DuckGrpcServer::Query(
         return grpc::Status::OK;
 
     } catch (const std::exception& ex) {
+        // Clean up duckdb_result if it was successfully created but not yet destroyed.
+        // Without this, an exception during chunk processing leaks the result.
+        if (result_valid) duckdb_destroy_result(&result);
         stat_errors_.fetch_add(1);
         return grpc::Status(grpc::StatusCode::INTERNAL, ex.what());
     }
@@ -864,16 +885,16 @@ grpc::Status DuckGrpcServer::BulkInsert(
                 sql += ")";
             }
 
-            // Add column aliases and ORDER BY (quote identifiers for safety)
+            // Add column aliases and ORDER BY (quote + escape identifiers for safety)
             sql += ") AS _t(";
             for (int c = 0; c < col_count; ++c) {
                 if (c > 0) sql += ", ";
-                sql += "\"" + request->columns(c).name() + "\"";
+                sql += quote_ident(request->columns(c).name());
             }
             sql += ") ORDER BY ";
             for (int s = 0; s < request->sort_columns_size(); ++s) {
                 if (s > 0) sql += ", ";
-                sql += "\"" + request->sort_columns(s) + "\"";
+                sql += quote_ident(request->sort_columns(s));
             }
 
             const WriteResult wr = write_to_all(sql);

@@ -192,6 +192,15 @@ private:
             if (batch.empty()) break; // stop_ was set and queue is drained
             execute_batch(batch);
         }
+        // Drain any remaining requests that arrived during shutdown.
+        // Without this, callers blocked on submit().get() would get
+        // std::future_error (broken_promise), crashing their gRPC handler.
+        std::lock_guard<std::mutex> lock(mu_);
+        while (!queue_.empty()) {
+            auto req = std::move(queue_.front());
+            queue_.pop();
+            req->promise.set_value(WriteResult{false, "server shutting down"});
+        }
     }
 
     /**
@@ -309,8 +318,10 @@ private:
             return;
         }
 
-        // Step 4: Commit.
+        // Step 4: Commit. If COMMIT fails, ROLLBACK to clear the failed transaction
+        // state before re-executing statements individually in auto-commit mode.
         if (!exec_sql("COMMIT")) {
+            exec_sql("ROLLBACK");
             for (size_t k = from; k < to; ++k)
                 execute_single(*batch[k]);
             return;
