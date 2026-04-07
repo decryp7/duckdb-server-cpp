@@ -499,25 +499,39 @@ Hybrid mode's real advantages over buffer pool:
 ### Configuration Examples
 
 ```bash
-# RECOMMENDED: Persistent data — single shard + large buffer pool
-# Simplest, fastest writes, buffer pool caches all data in RAM
+# LOW CONCURRENCY (<20 concurrent): single shard + large buffer pool
 --db data.duckdb --shards 1 --readers 16 --memory-limit 12GB --batch-ms 1
 
-# High concurrency reads (50+ concurrent) — add shards for lock reduction
+# MEDIUM CONCURRENCY (20-100): add shards for lock reduction
 --db data.duckdb --shards 4 --readers 64 --memory-limit 12GB --batch-ms 1
 
-# Read-heavy analytics (no persistence needed)
---db :memory: --shards 4 --readers 64 --batch-ms 1 --batch-max 64
+# HIGH CONCURRENCY (1000 readers + writers): 8 shards, 256 pool connections
+--db data.duckdb --shards 8 --readers 256 --memory-limit 16GB --batch-ms 1 --batch-max 512
 
-# Write-heavy (event ingestion, ETL) — always single shard
---db data.duckdb --shards 1 --readers 16 --batch-ms 5 --batch-max 512
+# HIGH CONCURRENCY + NO PERSISTENCE: memory shards for max speed
+--db :memory: --shards 8 --readers 256 --batch-ms 1 --batch-max 512
 
-# Hybrid: data exceeds RAM or write latency critical (advanced)
---backup-db data.duckdb --shards 4 --readers 64 --memory-limit 8GB
+# HIGH CONCURRENCY + PERSISTENCE: hybrid mode
+--backup-db data.duckdb --shards 8 --readers 256 --memory-limit 16GB --batch-ms 1
 
-# Development (single user)
+# WRITE-HEAVY: fewer shards to minimize fsync
+--db data.duckdb --shards 2 --readers 32 --batch-ms 5 --batch-max 512
+
+# DEVELOPMENT (single user)
 --db :memory: --shards 1 --readers 4
 ```
+
+### Scaling to 1000 Concurrent
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `--shards 8` | 8 shards | 1000 readers / 8 = 125 per shard — within DuckDB sweet spot |
+| `--readers 256` | 256 pool connections | 256/8 = 32 per shard; excess requests queue (10s timeout) |
+| `--batch-ms 1` | 1ms window | At 1000 writers, each 1ms batch collects ~50-100 writes |
+| `--batch-max 512` | 512 per batch | Handles burst of 512 simultaneous writes per transaction |
+| `--memory-limit 16GB` | 16GB total | 16GB/8 = 2GB per shard |
+
+**Best server for 1000 concurrent:** Rust (async I/O, no thread-per-RPC overhead).
 
 ---
 

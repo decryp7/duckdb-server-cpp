@@ -40,7 +40,7 @@ namespace DuckDbBenchmark
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
             Console.WriteLine("  Target server  : {0}:{1}", host, port);
-            Console.WriteLine("  Mode           : {0}", full ? "FULL (all tests + max concurrency + sustained)" : quick ? "QUICK (smoke test)" : "STANDARD");
+            Console.WriteLine("  Mode           : {0}", full ? "FULL (all tests + max 1000 concurrent + 60s sustained)" : quick ? "QUICK (smoke test)" : "STANDARD (scaling to 1000 concurrent)");
             Console.WriteLine("  Protocol       : custom gRPC (proto/duckdb_service.proto)");
             Console.WriteLine("  Encoding       : columnar protobuf (packed arrays per column)");
             Console.WriteLine("  Client         : single shared DuckDbClient (HTTP/2 multiplexing)");
@@ -135,12 +135,12 @@ namespace DuckDbBenchmark
             Console.WriteLine("==========================================================================");
             Console.WriteLine("  CONCURRENT READERS — Scaling test");
             Console.WriteLine("  Each thread sends 20 SELECT queries returning 1000 rows (2 columns).");
-            Console.WriteLine("  Scaling: 1 → 5 → 10 → 25 → 50 → 100 → 150 → 200 → 250 → 300 threads");
+            Console.WriteLine("  Scaling: 1 → 10 → 50 → 100 → 250 → 500 → 750 → 1000 threads");
             Console.WriteLine("  Purpose: find the throughput curve and saturation point for reads.");
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
-            int[] readerLevels = { 1, 5, 10, 25, 50, 100, 150, 200, 250, 300 };
+            int[] readerLevels = { 1, 10, 50, 100, 250, 500, 750, 1000 };
             foreach (int level in readerLevels)
             {
                 var result = runner.RunConcurrentReaders(level, 20, 1000);
@@ -154,12 +154,12 @@ namespace DuckDbBenchmark
             Console.WriteLine("  Each thread sends 20 INSERT statements into bench_write.");
             Console.WriteLine("  The server's WriteSerializer batches these into transactions and");
             Console.WriteLine("  merges compatible INSERTs into multi-row statements automatically.");
-            Console.WriteLine("  Scaling: 1 → 5 → 10 → 25 → 50 → 100 → 150 → 200 → 250 → 300 threads");
+            Console.WriteLine("  Scaling: 1 → 10 → 50 → 100 → 250 → 500 → 750 → 1000 threads");
             Console.WriteLine("  Purpose: find the throughput curve for writes with batching.");
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
-            int[] writerLevels = { 1, 5, 10, 25, 50, 100, 150, 200, 250, 300 };
+            int[] writerLevels = { 1, 10, 50, 100, 250, 500, 750, 1000 };
             foreach (int level in writerLevels)
             {
                 var result = runner.RunConcurrentWriters(level, 20);
@@ -176,16 +176,13 @@ namespace DuckDbBenchmark
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
-            results.Add(runner.RunMixedWorkload(readers: 50, writers: 10, opsPerClient: 20));
+            results.Add(runner.RunMixedWorkload(readers: 50, writers: 50, opsPerClient: 20));
             results.Last().Print();
 
-            results.Add(runner.RunMixedWorkload(readers: 100, writers: 50, opsPerClient: 15));
+            results.Add(runner.RunMixedWorkload(readers: 250, writers: 250, opsPerClient: 10));
             results.Last().Print();
 
-            results.Add(runner.RunMixedWorkload(readers: 150, writers: 150, opsPerClient: 10));
-            results.Last().Print();
-
-            results.Add(runner.RunMixedWorkload(readers: 50, writers: 250, opsPerClient: 10));
+            results.Add(runner.RunMixedWorkload(readers: 500, writers: 500, opsPerClient: 5));
             results.Last().Print();
 
             // --- Large results ---
@@ -280,16 +277,16 @@ namespace DuckDbBenchmark
 
             // --- Max concurrency ---
             var readerResults = runner.FindMaxConcurrency(
-                isReader: true, startConcurrency: 10, maxConcurrency: 300,
-                step: 10, opsPerClient: 10, maxErrorRate: 0.05);
+                isReader: true, startConcurrency: 100, maxConcurrency: 1000,
+                step: 100, opsPerClient: 10, maxErrorRate: 0.05);
             results.AddRange(readerResults);
 
             var writerResults = runner.FindMaxConcurrency(
-                isReader: false, startConcurrency: 10, maxConcurrency: 300,
-                step: 10, opsPerClient: 10, maxErrorRate: 0.05);
+                isReader: false, startConcurrency: 100, maxConcurrency: 1000,
+                step: 100, opsPerClient: 10, maxErrorRate: 0.05);
             results.AddRange(writerResults);
 
-            // --- Sustained ---
+            // --- Sustained at 1000 concurrent ---
             Console.WriteLine();
             Console.WriteLine("==========================================================================");
             Console.WriteLine("  SUSTAINED THROUGHPUT — Stability test (60 seconds each)");
@@ -298,15 +295,15 @@ namespace DuckDbBenchmark
             Console.WriteLine("==========================================================================");
             Console.WriteLine();
 
-            var sr = runner.RunSustainedThroughput(concurrency: 50, durationSeconds: 60, isReader: true);
+            var sr = runner.RunSustainedThroughput(concurrency: 500, durationSeconds: 60, isReader: true);
             sr.Print();
             results.Add(sr);
 
-            var sw = runner.RunSustainedThroughput(concurrency: 50, durationSeconds: 60, isReader: false);
+            var sw = runner.RunSustainedThroughput(concurrency: 500, durationSeconds: 60, isReader: false);
             sw.Print();
             results.Add(sw);
 
-            var sm = runner.RunSustainedThroughput(concurrency: 100, durationSeconds: 60, isReader: true);
+            var sm = runner.RunSustainedThroughput(concurrency: 1000, durationSeconds: 60, isReader: true);
             sm.Print();
             results.Add(sm);
 

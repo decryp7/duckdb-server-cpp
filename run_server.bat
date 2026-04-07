@@ -9,7 +9,7 @@ REM    --db data.duckdb    File-based database for persistence.
 REM
 REM    --port 19100        gRPC listen port.
 REM
-REM    --readers 128       Connection pool sized for 100+ concurrent readers.
+REM    --readers 256       Connection pool sized for 1000 concurrent readers.
 REM                        Must be >= your peak concurrent reader count.
 REM                        If readers > pool size, requests queue and latency spikes.
 REM
@@ -47,16 +47,16 @@ REM ============================================================================
 echo.
 echo  DuckDB gRPC Server — Low Latency Mode
 echo  ========================================
-echo  Optimized for 100+ concurrent readers/writers
+echo  Optimized for 1000 concurrent readers/writers
 echo.
 
 server\bin\Release\DuckDbServer.exe ^
     --db data.duckdb ^
     --port 19100 ^
-    --shards 1 ^
-    --readers 16 ^
+    --shards 8 ^
+    --readers 256 ^
     --batch-ms 1 ^
-    --batch-max 64 ^
+    --batch-max 512 ^
     --batch-size 512 ^
-    --memory-limit 8GB ^
+    --memory-limit 16GB ^
     %*
