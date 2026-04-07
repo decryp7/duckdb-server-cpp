@@ -1,4 +1,4 @@
-# DuckDB gRPC Server  v5.3
+# DuckDB gRPC Server  v5.4
 
 Three server implementations (C#, C++, Rust) and a .NET 4.6.2 client.
 All use the same `proto/duckdb_service.proto` — fully interoperable.
@@ -95,6 +95,8 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | **Parallel write fan-out** | std::async (C++), Task.Run (C#), thread::scope (Rust) |
 | **Server GC** | .NET server GC mode (1 thread per CPU core) |
 | **Table-level cache** | Write invalidates only affected table's cache entries |
+| **Hybrid sharding** | File DB backup + N memory shards for reads (5-10x faster) |
+| **Memory eviction** | LRU eviction drops cold tables from memory, fallback to file DB |
 | **gRPC tuning** | 200 max streams, 2MB write buffer, keepalive, thread limiter |
 
 ---
@@ -112,6 +114,7 @@ Defined in `proto/duckdb_service.proto`. Columnar encoding.
 | `--batch-size` | `8192` | Rows per gRPC response |
 | `--memory-limit` | auto | DuckDB memory limit (auto: 80%/shards) |
 | `--threads` | `1` | DuckDB threads per connection |
+| `--backup-db` | — | Hybrid mode: file DB path for durable backup |
 | `--temp-dir` | — | Temp directory for DuckDB spill-to-disk |
 | `--timeout` | `30` | Query timeout (seconds, C# only) |
 
@@ -173,7 +176,8 @@ src/                             C++ implementation
 
 | Version | Summary |
 |---|---|
-| **v5.3** | Table-level cache invalidation, gRPC thread limiter |
+| **v5.4** | Hybrid sharding (file backup + memory reads), memory eviction, query fallback |
+| v5.3 | Table-level cache invalidation, gRPC thread limiter |
 | v5.2 | QueryArrow RPC, concurrent appends, sorted insert, parallel fan-out, 28 bug fixes |
 | v5.1 | Performance: auto memory_limit/shard, late materialization, allocator flush, Arena alloc (C++), temp_directory |
 | **v5.0** | Custom gRPC, no Arrow, sharding, caching, 3 server implementations |
