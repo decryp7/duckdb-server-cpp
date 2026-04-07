@@ -323,10 +323,14 @@ impl DuckDbService for DuckDbServerImpl {
                 &req.table, &req.columns, &req.data, req.row_count as usize)?;
 
             if has_sort {
-                // Wrap in SELECT ... ORDER BY for sorted insert (improves zonemap effectiveness).
-                // Original: INSERT INTO t VALUES (1,'a'), (2,'b')
-                // Sorted:   INSERT INTO t SELECT * FROM (VALUES (1,'a'), (2,'b')) AS _t(col1,col2) ORDER BY col1
+                // Validate sort columns against column metadata to prevent SQL injection
                 let col_names: Vec<_> = req.columns.iter().map(|c| c.name.clone()).collect();
+                for sc in &req.sort_columns {
+                    if !col_names.contains(sc) {
+                        return Err(format!("sort_columns: unknown column '{}'", sc));
+                    }
+                }
+                // Wrap in SELECT ... ORDER BY for sorted insert (improves zonemap effectiveness)
                 let sort_cols = req.sort_columns.join(", ");
 
                 let values_pos = sql.find("VALUES").ok_or("No VALUES in SQL".to_string())?;

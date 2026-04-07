@@ -519,9 +519,21 @@ namespace DuckDbServer
                 return Task.FromResult(new BulkInsertResponse
                     { Success = false, Error = "data column count does not match columns metadata" });
 
-            // Sorted insert: use SQL with ORDER BY for better zonemap effectiveness
+            // Sorted insert: use SQL with ORDER BY for better zonemap effectiveness.
+            // Sort columns are validated against column metadata to prevent SQL injection.
             if (request.SortColumns.Count > 0)
             {
+                // Validate sort columns exist in the column list
+                var colNames = new System.Collections.Generic.HashSet<string>();
+                for (int c = 0; c < request.Columns.Count; c++)
+                    colNames.Add(request.Columns[c].Name);
+                foreach (var sc in request.SortColumns)
+                {
+                    if (!colNames.Contains(sc))
+                        return Task.FromResult(new BulkInsertResponse
+                            { Success = false, Error = "sort_columns: unknown column '" + sc + "'" });
+                }
+
                 try
                 {
                     string sql = BulkInsertSqlBuilder.BuildSorted(table, request.Columns, request.Data, rowCount, request.SortColumns);

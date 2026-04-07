@@ -187,15 +187,14 @@ Shard& DuckGrpcServer::next_for_read() {
 }
 
 /**
- * @brief Fan-out a write to ALL shards (serial submission).
+ * @brief Fan-out a write to ALL shards (parallel via std::async).
  *
  * Each shard's WriteSerializer batches the write with other concurrent writes.
- * Serial submission is simpler than parallel and sufficient because each
- * Submit() blocks only until the batch commits (~5ms window).
+ * Multi-shard fan-out runs in parallel via std::async for lower latency.
+ * Single-shard fast path avoids the async overhead.
  *
- * Returns on first error — remaining shards may not receive the write,
- * which can leave shards inconsistent. In practice, errors are rare
- * (schema mismatch, constraint violation) and affect all shards equally.
+ * Returns on first error. Remaining futures are still collected (std::async
+ * futures block on destruction), so all shards complete before returning.
  *
  * @param sql  SQL statement to execute on every shard.
  * @return     WriteResult from the first shard, or first error encountered.
@@ -806,7 +805,22 @@ grpc::Status DuckGrpcServer::BulkInsert(
     try {
         // If sort_columns specified, use SQL with ORDER BY for better zonemap effectiveness.
         // This is slower than Appender but ensures data is sorted on disk.
+        // Sort columns are validated against the column list to prevent SQL injection.
         if (request->sort_columns_size() > 0) {
+            // Validate: every sort column must exist in the column metadata
+            for (int sc = 0; sc < request->sort_columns_size(); ++sc) {
+                bool found = false;
+                for (int c = 0; c < col_count; ++c) {
+                    if (request->columns(c).name() == request->sort_columns(sc)) {
+                        found = true; break;
+                    }
+                }
+                if (!found) {
+                    response->set_success(false);
+                    response->set_error("sort_columns: unknown column '" + request->sort_columns(sc) + "'");
+                    return grpc::Status::OK;
+                }
+            }
             // Build: INSERT INTO table SELECT * FROM (VALUES (...), ...) AS _t(c1,c2,...) ORDER BY sort_col1, ...
             std::string sql;
             sql.reserve(row_count * col_count * 10 + 200);
@@ -850,16 +864,16 @@ grpc::Status DuckGrpcServer::BulkInsert(
                 sql += ")";
             }
 
-            // Add column aliases and ORDER BY
+            // Add column aliases and ORDER BY (quote identifiers for safety)
             sql += ") AS _t(";
             for (int c = 0; c < col_count; ++c) {
                 if (c > 0) sql += ", ";
-                sql += request->columns(c).name();
+                sql += "\"" + request->columns(c).name() + "\"";
             }
             sql += ") ORDER BY ";
             for (int s = 0; s < request->sort_columns_size(); ++s) {
                 if (s > 0) sql += ", ";
-                sql += request->sort_columns(s);
+                sql += "\"" + request->sort_columns(s) + "\"";
             }
 
             const WriteResult wr = write_to_all(sql);
