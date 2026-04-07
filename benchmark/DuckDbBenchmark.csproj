@@ -69,6 +69,10 @@
       <Project>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</Project>
       <Name>DuckDbClient</Name>
     </ProjectReference>
+    <ProjectReference Include="..\shared\DuckDbShared.csproj">
+      <Project>{E5F6A7B8-C9D0-1234-EFAB-CDEF01234567}</Project>
+      <Name>DuckDbShared</Name>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
