@@ -42,7 +42,7 @@ if exist "cpp\bin\Release\DuckDbServerCpp.exe" (
     --db data.duckdb ^
     --port 19100 ^
     --shards 8 ^
-    --readers 256 ^
+    --readers 512 ^
     --batch-ms 1 ^
     --batch-max 512 ^
     --memory-limit 16GB ^
