@@ -212,10 +212,9 @@ int main(int argc, char* argv[]) {
         builder.SetSyncServerOption(
             grpc::ServerBuilder::SyncServerOption::MAX_POLLERS, static_cast<int>(hw * 2));
 
-        // Limit server-wide resources to prevent thread explosion under load
-        grpc::ResourceQuota quota;
-        quota.SetMaxThreads(static_cast<int>(hw * 4)); // 4 threads per CPU core max
-        builder.SetResourceQuota(quota);
+        // Note: ResourceQuota thread limiting removed — it causes ResourceExhausted
+        // errors at high concurrency. gRPC's internal thread management + the connection
+        // pool (512 readers) are sufficient to prevent unbounded thread growth.
 
         // HTTP/2 tuning
         builder.AddChannelArgument(GRPC_ARG_MAX_CONCURRENT_STREAMS, 200);
