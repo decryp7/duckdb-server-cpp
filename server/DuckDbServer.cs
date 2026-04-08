@@ -418,19 +418,9 @@ namespace DuckDbServer
             return response;
         }
 
-        // ── QueryArrow ────────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Arrow IPC streaming is not supported in the C# server. Returns UNIMPLEMENTED
-        /// so clients can fall back to the columnar Query RPC.
-        /// </summary>
-        public override Task QueryArrow(QueryRequest request,
-            IServerStreamWriter<ArrowResponse> responseStream,
-            ServerCallContext context)
-        {
-            throw new RpcException(new Status(StatusCode.Unimplemented,
-                "QueryArrow not available in C# server. Use Rust server for Arrow IPC."));
-        }
+        // NOTE: QueryArrow RPC is not implemented in the C# server.
+        // The gRPC base class returns UNIMPLEMENTED automatically for unoverridden methods.
+        // After regenerating proto code (generate_proto.bat), an explicit override can be added.
 
         // ── Execute ──────────────────────────────────────────────────────────
 

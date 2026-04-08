@@ -150,6 +150,9 @@ struct Shard {
     duckdb_connection bulk_conn;              ///< Dedicated connection for Appender-based bulk inserts.
     std::mutex bulk_mu;                       ///< Mutex protecting bulk_conn (Appender is not thread-safe).
 
+    /// Default constructor: zero-initialize C handles.
+    Shard() : db(nullptr), writer_conn(nullptr), bulk_conn(nullptr) {}
+
     ~Shard() {
         writer.reset();                       /* Stop writer thread first. */
         pool.reset();                         /* Close all pooled read connections. */
