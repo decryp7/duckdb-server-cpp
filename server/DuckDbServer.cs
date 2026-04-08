@@ -610,11 +610,14 @@ namespace DuckDbServer
                 return Task.FromResult(new BulkInsertResponse
                     { Success = false, Error = "data column count does not match columns metadata" });
 
+            // NOTE: Sorted insert (sort_columns) requires regenerating proto code.
+            // After running generate_proto.bat, uncomment the sorted insert block below.
+            // Until then, all BulkInsert uses the Appender fast path.
+
+            /*
             // Sorted insert: use SQL with ORDER BY for better zonemap effectiveness.
-            // Sort columns are validated against column metadata to prevent SQL injection.
             if (request.SortColumns.Count > 0)
             {
-                // Validate sort columns exist in the column list
                 var colNames = new System.Collections.Generic.HashSet<string>();
                 for (int c = 0; c < request.Columns.Count; c++)
                     colNames.Add(request.Columns[c].Name);
@@ -644,6 +647,7 @@ namespace DuckDbServer
                     return Task.FromResult(new BulkInsertResponse { Success = false, Error = ex.Message });
                 }
             }
+            */
 
             try
             {
@@ -693,7 +697,7 @@ namespace DuckDbServer
 
                         if (isNull)
                         {
-                            row.AppendValue(DBNull.Value);
+                            row.AppendValue((string)null);
                             continue;
                         }
 
