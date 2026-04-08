@@ -146,7 +146,10 @@ namespace DuckDbClient
             }
             catch (RpcException ex)
             {
-                throw new DuckDbException("Query failed: " + ex.Status.Detail, ex);
+                string detail = string.IsNullOrEmpty(ex.Status.Detail)
+                    ? ex.StatusCode.ToString() + " - " + ex.Message
+                    : ex.Status.Detail;
+                throw new DuckDbException("Query failed: " + detail, ex);
             }
         }
 
@@ -178,7 +181,7 @@ namespace DuckDbClient
                     .ResponseAsync.ConfigureAwait(false);
                 if (!r.Success) throw new DuckDbException("Execute failed: " + r.Error);
             }
-            catch (RpcException ex) { throw new DuckDbException("Execute failed: " + ex.Status.Detail, ex); }
+            catch (RpcException ex) { throw new DuckDbException("Execute failed: " + (string.IsNullOrEmpty(ex.Status.Detail) ? ex.StatusCode + " - " + ex.Message : ex.Status.Detail), ex); }
         }
 
         /// <summary>
@@ -196,7 +199,7 @@ namespace DuckDbClient
                 var r = Task.Run(async () => await grpcClient.PingAsync(new PingRequest()).ResponseAsync.ConfigureAwait(false)).GetAwaiter().GetResult();
                 if (r.Message != "pong") throw new DuckDbException("Ping: unexpected '" + r.Message + "'");
             }
-            catch (RpcException ex) { throw new DuckDbException("Ping failed: " + ex.Status.Detail, ex); }
+            catch (RpcException ex) { throw new DuckDbException("Ping failed: " + (string.IsNullOrEmpty(ex.Status.Detail) ? ex.StatusCode + " - " + ex.Message : ex.Status.Detail), ex); }
         }
 
         /// <summary>
@@ -218,7 +221,7 @@ namespace DuckDbClient
             }
             catch (Grpc.Core.RpcException ex)
             {
-                throw new DuckDbException("BulkInsert failed: " + ex.Status.Detail, ex);
+                throw new DuckDbException("BulkInsert failed: " + (string.IsNullOrEmpty(ex.Status.Detail) ? ex.StatusCode + " - " + ex.Message : ex.Status.Detail), ex);
             }
         }
 
@@ -231,7 +234,7 @@ namespace DuckDbClient
                 return string.Format("{{\"queries_read\":{0},\"queries_write\":{1},\"errors\":{2},\"reader_pool_size\":{3},\"port\":{4}}}",
                     r.QueriesRead, r.QueriesWrite, r.Errors, r.ReaderPoolSize, r.Port);
             }
-            catch (RpcException ex) { throw new DuckDbException("GetStats failed: " + ex.Status.Detail, ex); }
+            catch (RpcException ex) { throw new DuckDbException("GetStats failed: " + (string.IsNullOrEmpty(ex.Status.Detail) ? ex.StatusCode + " - " + ex.Message : ex.Status.Detail), ex); }
         }
 
         /// <summary>
