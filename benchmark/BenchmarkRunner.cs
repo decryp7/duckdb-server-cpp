@@ -76,10 +76,10 @@ namespace DuckDbBenchmark
                     sw.Stop();
                     tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                 }
-                catch
+                catch (Exception ex)
                 {
                     sw.Stop();
-                    tracker.RecordError();
+                    tracker.RecordError(ex.Message);
                 }
             }
         }
@@ -159,10 +159,10 @@ namespace DuckDbBenchmark
                     sw.Stop();
                     tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                 }
-                catch
+                catch (Exception ex)
                 {
                     sw.Stop();
-                    tracker.RecordError();
+                    tracker.RecordError(ex.Message);
                 }
             }
         }
@@ -231,10 +231,10 @@ namespace DuckDbBenchmark
                     sw.Stop();
                     tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                 }
-                catch
+                catch (Exception ex)
                 {
                     sw.Stop();
-                    tracker.RecordError();
+                    tracker.RecordError(ex.Message);
                 }
             }
         }
@@ -278,10 +278,10 @@ namespace DuckDbBenchmark
                         sw.Stop();
                         tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         sw.Stop();
-                        tracker.RecordError();
+                        tracker.RecordError(ex.Message);
                     }
                 }
 
@@ -420,10 +420,10 @@ namespace DuckDbBenchmark
                     tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                 }
                 catch (OperationCanceledException) { break; }
-                catch
+                catch (Exception ex)
                 {
                     sw.Stop();
-                    tracker.RecordError();
+                    tracker.RecordError(ex.Message);
                 }
             }
         }
@@ -446,10 +446,10 @@ namespace DuckDbBenchmark
                     tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                 }
                 catch (OperationCanceledException) { break; }
-                catch
+                catch (Exception ex)
                 {
                     sw.Stop();
-                    tracker.RecordError();
+                    tracker.RecordError(ex.Message);
                 }
                 i++;
             }
@@ -547,10 +547,10 @@ namespace DuckDbBenchmark
                                 sw.Stop();
                                 tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                             }
-                            catch
+                            catch (Exception ex)
                             {
                                 sw.Stop();
-                                tracker.RecordError();
+                                tracker.RecordError(ex.Message);
                             }
                         }
                     });
@@ -608,10 +608,10 @@ namespace DuckDbBenchmark
                                 sw.Stop();
                                 tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                             }
-                            catch
+                            catch (Exception ex)
                             {
                                 sw.Stop();
-                                tracker.RecordError();
+                                tracker.RecordError(ex.Message);
                             }
                         }
                     });
@@ -686,12 +686,12 @@ namespace DuckDbBenchmark
                         if (response.Success)
                             tracker.RecordSuccess(sw.Elapsed.TotalMilliseconds);
                         else
-                            tracker.RecordError();
+                            tracker.RecordError(response.Error);
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         sw.Stop();
-                        tracker.RecordError();
+                        tracker.RecordError(ex.Message);
                     }
                 }
 

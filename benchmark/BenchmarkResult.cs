@@ -25,6 +25,7 @@ namespace DuckDbBenchmark
         public double P50LatencyMs { get; set; }
         public double P95LatencyMs { get; set; }
         public double P99LatencyMs { get; set; }
+        public string ErrorDetails { get; set; }
 
         public void Print()
         {
@@ -43,6 +44,15 @@ namespace DuckDbBenchmark
             Console.WriteLine("  │ Latency P50  : " + P50LatencyMs.ToString("F2") + " ms (half of requests faster than this)");
             Console.WriteLine("  │ Latency P95  : " + P95LatencyMs.ToString("F2") + " ms (95% of requests faster than this)");
             Console.WriteLine("  │ Latency P99  : " + P99LatencyMs.ToString("F2") + " ms (99% of requests faster than this)");
+            if (ErrorCount > 0 && !string.IsNullOrEmpty(ErrorDetails))
+            {
+                Console.WriteLine("  │ Error breakdown:");
+                foreach (var line in ErrorDetails.Split('\n'))
+                {
+                    if (!string.IsNullOrEmpty(line.Trim()))
+                        Console.WriteLine("  │   " + line.Trim());
+                }
+            }
             Console.WriteLine("  └─────────────────────────────────────────────────────");
             Console.WriteLine();
         }
@@ -62,6 +72,8 @@ namespace DuckDbBenchmark
     {
         private readonly List<double> latencies = new List<double>();
         private readonly object lockObj = new object();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> errorMessages
+            = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
         private int successCount;
         private int errorCount;
 
@@ -74,6 +86,17 @@ namespace DuckDbBenchmark
         public void RecordError()
         {
             Interlocked.Increment(ref errorCount);
+        }
+
+        public void RecordError(string message)
+        {
+            Interlocked.Increment(ref errorCount);
+            if (!string.IsNullOrEmpty(message))
+            {
+                // Truncate long messages and track frequency
+                string key = message.Length > 80 ? message.Substring(0, 80) : message;
+                errorMessages.AddOrUpdate(key, 1, (k, v) => v + 1);
+            }
         }
 
         public BenchmarkResult BuildResult(string scenarioName, string description, int concurrency, long elapsedMs)
@@ -105,6 +128,15 @@ namespace DuckDbBenchmark
                     result.P95LatencyMs = Percentile(latencies, 0.95);
                     result.P99LatencyMs = Percentile(latencies, 0.99);
                 }
+            }
+
+            // Attach error details if any
+            if (errorMessages.Count > 0)
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (var kvp in errorMessages)
+                    sb.AppendFormat("    [{0}x] {1}\n", kvp.Value, kvp.Key);
+                result.ErrorDetails = sb.ToString();
             }
 
             return result;
