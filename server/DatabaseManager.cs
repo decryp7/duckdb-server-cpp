@@ -198,7 +198,6 @@ namespace DuckDbServer
 
             // Late materialization: limits the number of rows materialized before filtering,
             // improving performance for selective queries on wide tables.
-            ExecutePragma("SET late_materialization_max_rows=1000");
 
             // Allocator flush threshold: controls when DuckDB returns unused memory to the OS.
             // A 128MB threshold prevents excessive memory retention while avoiding frequent

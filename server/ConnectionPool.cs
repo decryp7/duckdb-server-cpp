@@ -274,7 +274,6 @@ namespace DuckDbServer
             TryPragma(conn, "SET threads=1");
             TryPragma(conn, "SET preserve_insertion_order=false");
             TryPragma(conn, "PRAGMA enable_object_cache");
-            TryPragma(conn, "SET late_materialization_max_rows=1000");
         }
 
         private static void TryPragma(DuckDBConnection conn, string sql)

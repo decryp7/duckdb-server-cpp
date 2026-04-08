@@ -236,7 +236,6 @@ DuckGrpcServer::DuckGrpcServer(const ServerConfig& cfg)
         duckdb_query(s->writer_conn, "PRAGMA enable_object_cache", nullptr);
         duckdb_query(s->writer_conn, "SET preserve_insertion_order=false", nullptr);
         duckdb_query(s->writer_conn, "SET checkpoint_threshold='256MB'", nullptr);
-        duckdb_query(s->writer_conn, "SET late_materialization_max_rows=1000", nullptr);
         duckdb_query(s->writer_conn, "SET allocator_flush_threshold='128MB'", nullptr);
 
         shards_.push_back(std::move(s));
