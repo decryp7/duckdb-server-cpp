@@ -39,7 +39,7 @@ if exist "cpp\bin\Release\DuckDbServerCpp.exe" (
 )
 
 %EXE% ^
-    --db data.duckdb ^
+    --backup-db data.duckdb ^
     --port 19100 ^
     --shards 8 ^
     --readers 512 ^

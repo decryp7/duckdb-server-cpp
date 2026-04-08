@@ -51,7 +51,7 @@ echo  Optimized for 1000 concurrent readers/writers
 echo.
 
 server\bin\Release\DuckDbServer.exe ^
-    --db data.duckdb ^
+    --backup-db data.duckdb ^
     --port 19100 ^
     --shards 8 ^
     --readers 512 ^
